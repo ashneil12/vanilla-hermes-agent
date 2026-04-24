@@ -22,15 +22,29 @@ export function QueuedMessages({ cols, queueEditIdx, queued, t }: QueuedMessages
   const q = getQueueWindow(queued.length, queueEditIdx)
 
   return (
-    <Box flexDirection="column" marginTop={1}>
-      <Text color={t.color.dim} dimColor>
-        queued ({queued.length}){queueEditIdx !== null ? ` · editing ${queueEditIdx + 1}` : ''}
-      </Text>
+    <Box
+      backgroundColor={t.color.panelAltBg}
+      borderColor={t.color.statusBorder}
+      borderStyle="single"
+      flexDirection="column"
+      marginBottom={1}
+      opaque
+      paddingX={1}
+      paddingY={0}
+    >
+      <Box flexWrap="wrap" marginBottom={1}>
+        <Text backgroundColor={t.color.chipBg} color={t.color.chipText}>
+          {' '}
+          queued
+          {' '}
+        </Text>
+        <Text color={t.color.panelMuted}> {queued.length} pending</Text>
+        {queueEditIdx !== null ? <Text color={t.color.amber}> · editing {queueEditIdx + 1}</Text> : null}
+      </Box>
 
       {q.showLead && (
         <Text color={t.color.dim} dimColor>
-          {' '}
-          …
+          … earlier queued messages
         </Text>
       )}
 
@@ -39,15 +53,22 @@ export function QueuedMessages({ cols, queueEditIdx, queued, t }: QueuedMessages
         const active = queueEditIdx === idx
 
         return (
-          <Text color={active ? t.color.amber : t.color.dim} dimColor key={`${idx}-${item.slice(0, 16)}`}>
-            {active ? '▸' : ' '} {idx + 1}. {compactPreview(item, Math.max(16, cols - 10))}
+          <Text
+            backgroundColor={active ? t.color.completionCurrentBg : undefined}
+            color={active ? t.color.cornsilk : t.color.panelMuted}
+            key={`${idx}-${item.slice(0, 16)}`}
+            wrap="truncate-end"
+          >
+            <Text color={active ? t.color.amber : t.color.dim}>{active ? '▸' : '·'} </Text>
+            <Text color={active ? t.color.amber : t.color.dim}>{idx + 1}.</Text>{' '}
+            {compactPreview(item, Math.max(16, cols - 18))}
           </Text>
         )
       })}
 
       {q.showTail && (
         <Text color={t.color.dim} dimColor>
-          {'  '}…and {queued.length - q.end} more
+          …and {queued.length - q.end} more queued
         </Text>
       )}
     </Box>

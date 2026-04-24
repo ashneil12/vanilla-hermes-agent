@@ -1,4 +1,4 @@
-import { Box, Text, useInput, useStdout } from '@hermes/ink'
+import { Box, Text, useInput } from '@hermes/ink'
 import { useEffect, useState } from 'react'
 
 import type { GatewayClient } from '../gatewayClient.js'
@@ -7,8 +7,6 @@ import { asRpcResult, rpcErrorMessage } from '../lib/rpc.js'
 import type { Theme } from '../theme.js'
 
 const VISIBLE = 15
-const MIN_WIDTH = 60
-const MAX_WIDTH = 120
 
 const age = (ts: number) => {
   const d = (Date.now() / 1000 - ts) / 86400
@@ -29,9 +27,6 @@ export function SessionPicker({ gw, onCancel, onSelect, t }: SessionPickerProps)
   const [err, setErr] = useState('')
   const [sel, setSel] = useState(0)
   const [loading, setLoading] = useState(true)
-
-  const { stdout } = useStdout()
-  const width = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, (stdout?.columns ?? 80) - 6))
 
   useEffect(() => {
     gw.request<SessionListResponse>('session.list', { limit: 20 })
@@ -80,13 +75,13 @@ export function SessionPicker({ gw, onCancel, onSelect, t }: SessionPickerProps)
   })
 
   if (loading) {
-    return <Text color={t.color.dim}>loading sessions…</Text>
+    return <Text color={t.color.panelMuted}>loading sessions…</Text>
   }
 
   if (err) {
     return (
       <Box flexDirection="column">
-        <Text color={t.color.label}>error: {err}</Text>
+        <Text color={t.color.error}>error: {err}</Text>
         <Text color={t.color.dim}>Esc to cancel</Text>
       </Box>
     )
@@ -104,36 +99,42 @@ export function SessionPicker({ gw, onCancel, onSelect, t }: SessionPickerProps)
   const off = Math.max(0, Math.min(sel - Math.floor(VISIBLE / 2), items.length - VISIBLE))
 
   return (
-    <Box flexDirection="column" width={width}>
-      <Text bold color={t.color.amber}>
-        Resume Session
-      </Text>
+    <Box flexDirection="column">
+      <Box flexWrap="wrap" marginBottom={1}>
+        <Text backgroundColor={t.color.chipBg} color={t.color.chipText}>
+          {' '}
+          sessions
+          {' '}
+        </Text>
+        <Text color={t.color.cornsilk}> resume a previous thread</Text>
+      </Box>
 
       {off > 0 && <Text color={t.color.dim}> ↑ {off} more</Text>}
 
       {items.slice(off, off + VISIBLE).map((s, vi) => {
         const i = off + vi
-        const selected = sel === i
+        const active = sel === i
 
         return (
-          <Box key={s.id}>
-            <Text bold={selected} color={selected ? t.color.amber : t.color.dim} inverse={selected}>
-              {selected ? '▸ ' : '  '}
-            </Text>
+          <Box
+            backgroundColor={active ? t.color.completionCurrentBg : undefined}
+            flexDirection="column"
+            key={s.id}
+            marginBottom={1}
+          >
+            <Box>
+              <Text color={active ? t.color.label : t.color.dim}>{active ? '▸ ' : '· '}</Text>
 
-            <Box width={30}>
-              <Text bold={selected} color={selected ? t.color.amber : t.color.dim} inverse={selected}>
-                {String(i + 1).padStart(2)}. [{s.id}]
-              </Text>
+              <Box width={30}>
+                <Text color={active ? t.color.cornsilk : t.color.panelMuted}>
+                  {String(i + 1).padStart(2)}. [{s.id}]
+                </Text>
+              </Box>
+
+              <Text color={t.color.dim}>({s.message_count} msgs, {age(s.started_at)}, {s.source || 'tui'})</Text>
             </Box>
 
-            <Box width={30}>
-              <Text bold={selected} color={selected ? t.color.amber : t.color.dim} inverse={selected}>
-                ({s.message_count} msgs, {age(s.started_at)}, {s.source || 'tui'})
-              </Text>
-            </Box>
-
-            <Text bold={selected} color={selected ? t.color.amber : t.color.dim} inverse={selected} wrap="truncate-end">
+            <Text color={active ? t.color.cornsilk : t.color.panelMuted} wrap="truncate-end">
               {s.title || s.preview || '(untitled)'}
             </Text>
           </Box>

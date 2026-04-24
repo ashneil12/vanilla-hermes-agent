@@ -2,15 +2,13 @@ import { AlternateScreen, Box, NoSelect, ScrollBox, Text } from '@hermes/ink'
 import { useStore } from '@nanostores/react'
 import { memo } from 'react'
 
-import { useGateway } from '../app/gatewayContext.js'
 import type { AppLayoutProgressProps, AppLayoutProps } from '../app/interfaces.js'
-import { $isBlocked, $overlayState, patchOverlayState } from '../app/overlayStore.js'
+import { $isBlocked } from '../app/overlayStore.js'
 import { $uiState } from '../app/uiStore.js'
 import { PLACEHOLDER } from '../content/placeholders.js'
 import type { Theme } from '../theme.js'
-import type { DetailsMode, SectionVisibility } from '../types.js'
+import type { DetailsMode } from '../types.js'
 
-import { AgentsOverlay } from './agentsOverlay.js'
 import { GoodVibesHeart, StatusRule, StickyPromptTracker, TranscriptScrollbar } from './appChrome.js'
 import { FloatingOverlays, PromptZone } from './appOverlays.js'
 import { Banner, Panel, SessionPanel } from './branding.js'
@@ -25,7 +23,6 @@ const StreamingAssistant = memo(function StreamingAssistant({
   compact,
   detailsMode,
   progress,
-  sections,
   t
 }: StreamingAssistantProps) {
   if (!progress.showProgressArea && !progress.showStreamingArea) {
@@ -35,15 +32,7 @@ const StreamingAssistant = memo(function StreamingAssistant({
   return (
     <>
       {progress.streamSegments.map((msg, i) => (
-        <MessageLine
-          cols={cols}
-          compact={compact}
-          detailsMode={detailsMode}
-          key={`seg:${i}`}
-          msg={msg}
-          sections={sections}
-          t={t}
-        />
+        <MessageLine cols={cols} compact={compact} detailsMode={detailsMode} key={`seg:${i}`} msg={msg} t={t} />
       ))}
 
       {progress.showProgressArea && (
@@ -57,7 +46,6 @@ const StreamingAssistant = memo(function StreamingAssistant({
             reasoningActive={progress.reasoningActive}
             reasoningStreaming={progress.reasoningStreaming}
             reasoningTokens={progress.reasoningTokens}
-            sections={sections}
             subagents={progress.subagents}
             t={t}
             tools={progress.tools}
@@ -78,7 +66,6 @@ const StreamingAssistant = memo(function StreamingAssistant({
             text: progress.streaming,
             ...(progress.streamPendingTools.length && { tools: progress.streamPendingTools })
           }}
-          sections={sections}
           t={t}
         />
       )}
@@ -89,7 +76,6 @@ const StreamingAssistant = memo(function StreamingAssistant({
           compact={compact}
           detailsMode={detailsMode}
           msg={{ kind: 'trail', role: 'system', text: '', tools: progress.streamPendingTools }}
-          sections={sections}
           t={t}
         />
       )}
@@ -98,11 +84,16 @@ const StreamingAssistant = memo(function StreamingAssistant({
 })
 
 const TranscriptPane = memo(function TranscriptPane({
-  actions,
-  composer,
+  cols,
   progress,
+  setStickyPrompt,
   transcript
-}: Pick<AppLayoutProps, 'actions' | 'composer' | 'progress' | 'transcript'>) {
+}: {
+  cols: number
+  progress: AppLayoutProps['progress']
+  setStickyPrompt: (value: string) => void
+  transcript: AppLayoutProps['transcript']
+}) {
   const ui = useStore($uiState)
 
   return (
@@ -123,11 +114,10 @@ const TranscriptPane = memo(function TranscriptPane({
                 <Panel sections={row.msg.panelData.sections} t={ui.theme} title={row.msg.panelData.title} />
               ) : (
                 <MessageLine
-                  cols={composer.cols}
+                  cols={cols}
                   compact={ui.compact}
                   detailsMode={ui.detailsMode}
                   msg={row.msg}
-                  sections={ui.sections}
                   t={ui.theme}
                 />
               )}
@@ -138,11 +128,10 @@ const TranscriptPane = memo(function TranscriptPane({
 
           <StreamingAssistant
             busy={ui.busy}
-            cols={composer.cols}
+            cols={cols}
             compact={ui.compact}
             detailsMode={ui.detailsMode}
             progress={progress}
-            sections={ui.sections}
             t={ui.theme}
           />
         </Box>
@@ -155,7 +144,7 @@ const TranscriptPane = memo(function TranscriptPane({
       <StickyPromptTracker
         messages={transcript.historyItems}
         offsets={transcript.virtualHistory.offsets}
-        onChange={actions.setStickyPrompt}
+        onChange={setStickyPrompt}
         scrollRef={transcript.scrollRef}
       />
     </>
@@ -170,10 +159,11 @@ const ComposerPane = memo(function ComposerPane({
   const ui = useStore($uiState)
   const isBlocked = useStore($isBlocked)
   const sh = (composer.inputBuf[0] ?? composer.input).startsWith('!')
-  const pw = sh ? 2 : 3
+  const promptWidth = sh ? 4 : 5
+  const inputCols = Math.max(20, composer.cols - 18)
 
   return (
-    <NoSelect flexDirection="column" flexShrink={0} fromLeftEdge paddingX={1}>
+    <NoSelect flexDirection="column" flexShrink={0} fromLeftEdge paddingBottom={1} paddingX={1}>
       <QueuedMessages
         cols={composer.cols}
         queued={composer.queuedDisplay}
@@ -181,25 +171,23 @@ const ComposerPane = memo(function ComposerPane({
         t={ui.theme}
       />
 
-      {ui.bgTasks.size > 0 && (
-        <Text color={ui.theme.color.dim}>
-          {ui.bgTasks.size} background {ui.bgTasks.size === 1 ? 'task' : 'tasks'} running
-        </Text>
-      )}
+      <Box flexDirection="column" position="relative">
+        {ui.statusBar && (
+          <StatusRule
+            bgCount={ui.bgTasks.size}
+            busy={ui.busy}
+            cols={composer.cols}
+            cwdLabel={status.cwdLabel}
+            model={ui.info?.model?.split('/').pop() ?? ''}
+            sessionStartedAt={status.sessionStartedAt}
+            status={ui.status}
+            statusColor={status.statusColor}
+            t={ui.theme}
+            usage={ui.usage}
+            voiceLabel={status.voiceLabel}
+          />
+        )}
 
-      {status.showStickyPrompt ? (
-        <Text color={ui.theme.color.dim} wrap="truncate-end">
-          <Text color={ui.theme.color.label}>↳ </Text>
-
-          {status.stickyPrompt}
-        </Text>
-      ) : (
-        <Text> </Text>
-      )}
-
-      <StatusRulePane at="top" composer={composer} status={status} />
-
-      <Box flexDirection="column" marginTop={ui.statusBar === 'top' ? 0 : 1} position="relative">
         <FloatingOverlays
           cols={composer.cols}
           compIdx={composer.compIdx}
@@ -208,34 +196,87 @@ const ComposerPane = memo(function ComposerPane({
           onPickerSelect={actions.resumeById}
           pagerPageSize={composer.pagerPageSize}
         />
+      </Box>
 
-        {!isBlocked && (
-          <>
+      {!isBlocked && (
+        <Box
+          backgroundColor={ui.theme.color.panelBg}
+          borderColor={ui.theme.color.panelBorder}
+          borderStyle="single"
+          flexDirection="column"
+          marginBottom={1}
+          opaque
+          paddingX={1}
+          paddingY={0}
+        >
+          <Box flexWrap="wrap" marginBottom={1}>
+            <Text backgroundColor={ui.theme.color.chipAccentBg} color={ui.theme.color.chipAccentText}>
+              {' '}
+              compose
+              {' '}
+            </Text>
+            <Text color={ui.theme.color.panelMuted}> Enter send · Shift+Enter newline · / for commands</Text>
+            {ui.bgTasks.size > 0 ? (
+              <Text color={ui.theme.color.panelMuted}>
+                {' '}
+                · {ui.bgTasks.size} background {ui.bgTasks.size === 1 ? 'task' : 'tasks'}
+              </Text>
+            ) : null}
+          </Box>
+
+          {status.showStickyPrompt && (
+            <Box
+              backgroundColor={ui.theme.color.panelAltBg}
+              borderColor={ui.theme.color.statusBorder}
+              borderStyle="single"
+              flexDirection="column"
+              marginBottom={1}
+              opaque
+              paddingX={1}
+              paddingY={0}
+            >
+              <Text color={ui.theme.color.panelMuted} wrap="truncate-end">
+                <Text color={ui.theme.color.label}>context </Text>
+                {status.stickyPrompt}
+              </Text>
+            </Box>
+          )}
+
+          <Box
+            backgroundColor={ui.theme.color.panelAltBg}
+            borderColor={sh ? ui.theme.color.shellDollar : ui.theme.color.statusBorder}
+            borderStyle="single"
+            flexDirection="column"
+            opaque
+            paddingX={1}
+            paddingY={0}
+          >
             {composer.inputBuf.map((line, i) => (
               <Box key={i}>
-                <Box width={3}>
-                  <Text color={ui.theme.color.dim}>{i === 0 ? `${ui.theme.brand.prompt} ` : '  '}</Text>
+                <Box width={promptWidth}>
+                  <Text color={ui.theme.color.dim}>{i === 0 ? ' │ ' : ' · '}</Text>
                 </Box>
 
-                <Text color={ui.theme.color.cornsilk}>{line || ' '}</Text>
+                <Text color={ui.theme.color.panelMuted}>{line || ' '}</Text>
               </Box>
             ))}
 
             <Box position="relative">
-              <Box width={pw}>
+              <Box width={promptWidth}>
                 {sh ? (
-                  <Text color={ui.theme.color.shellDollar}>$ </Text>
+                  <Text color={ui.theme.color.shellDollar}> $ </Text>
                 ) : (
-                  <Text bold color={ui.theme.color.prompt}>
-                    {composer.inputBuf.length ? '  ' : `${ui.theme.brand.prompt} `}
+                  <Text backgroundColor={ui.theme.color.chipAccentBg} color={ui.theme.color.chipAccentText}>
+                    {' '}
+                    {ui.theme.brand.prompt}
+                    {' '}
                   </Text>
                 )}
               </Box>
 
               <Box flexGrow={1} position="relative">
-                {/* subtract NoSelect paddingX={1} (2 cols) + pw so wrap-ansi and cursorLayout agree */}
                 <TextInput
-                  columns={Math.max(20, composer.cols - pw - 2)}
+                  columns={inputCols}
                   onChange={composer.updateInput}
                   onPaste={composer.handleTextPaste}
                   onSubmit={composer.submit}
@@ -248,61 +289,18 @@ const ComposerPane = memo(function ComposerPane({
                 </Box>
               </Box>
             </Box>
-          </>
-        )}
-      </Box>
+
+            <Box marginTop={1}>
+              <Text color={ui.theme.color.dim}>
+                {ui.busy ? 'assistant is working · Ctrl+C interrupts the current run' : 'ready for the next prompt'}
+              </Text>
+            </Box>
+          </Box>
+        </Box>
+      )}
 
       {!composer.empty && !ui.sid && <Text color={ui.theme.color.dim}>⚕ {ui.status}</Text>}
-
-      <StatusRulePane at="bottom" composer={composer} status={status} />
     </NoSelect>
-  )
-})
-
-const AgentsOverlayPane = memo(function AgentsOverlayPane() {
-  const { gw } = useGateway()
-  const ui = useStore($uiState)
-  const overlay = useStore($overlayState)
-
-  return (
-    <AgentsOverlay
-      gw={gw}
-      initialHistoryIndex={overlay.agentsInitialHistoryIndex}
-      onClose={() => patchOverlayState({ agents: false, agentsInitialHistoryIndex: 0 })}
-      t={ui.theme}
-    />
-  )
-})
-
-const StatusRulePane = memo(function StatusRulePane({
-  at,
-  composer,
-  status
-}: Pick<AppLayoutProps, 'composer' | 'status'> & { at: 'bottom' | 'top' }) {
-  const ui = useStore($uiState)
-
-  if (ui.statusBar !== at) {
-    return null
-  }
-
-  return (
-    <Box marginTop={at === 'top' ? 1 : 0}>
-      <StatusRule
-        bgCount={ui.bgTasks.size}
-        busy={ui.busy}
-        cols={composer.cols}
-        cwdLabel={status.cwdLabel}
-        model={ui.info?.model?.split('/').pop() ?? ''}
-        sessionStartedAt={status.sessionStartedAt}
-        showCost={ui.showCost}
-        status={ui.status}
-        statusColor={status.statusColor}
-        t={ui.theme}
-        turnStartedAt={status.turnStartedAt}
-        usage={ui.usage}
-        voiceLabel={status.voiceLabel}
-      />
-    </Box>
   )
 })
 
@@ -314,32 +312,24 @@ export const AppLayout = memo(function AppLayout({
   status,
   transcript
 }: AppLayoutProps) {
-  const overlay = useStore($overlayState)
+  const ui = useStore($uiState)
 
   return (
     <AlternateScreen mouseTracking={mouseTracking}>
-      <Box flexDirection="column" flexGrow={1}>
+      <Box backgroundColor={ui.theme.color.surfaceBg} flexDirection="column" flexGrow={1} opaque>
         <Box flexDirection="row" flexGrow={1}>
-          {overlay.agents ? (
-            <AgentsOverlayPane />
-          ) : (
-            <TranscriptPane actions={actions} composer={composer} progress={progress} transcript={transcript} />
-          )}
+          <TranscriptPane cols={composer.cols} progress={progress} setStickyPrompt={actions.setStickyPrompt} transcript={transcript} />
         </Box>
 
-        {!overlay.agents && (
-          <>
-            <PromptZone
-              cols={composer.cols}
-              onApprovalChoice={actions.answerApproval}
-              onClarifyAnswer={actions.answerClarify}
-              onSecretSubmit={actions.answerSecret}
-              onSudoSubmit={actions.answerSudo}
-            />
+        <PromptZone
+          cols={composer.cols}
+          onApprovalChoice={actions.answerApproval}
+          onClarifyAnswer={actions.answerClarify}
+          onSecretSubmit={actions.answerSecret}
+          onSudoSubmit={actions.answerSudo}
+        />
 
-            <ComposerPane actions={actions} composer={composer} status={status} />
-          </>
-        )}
+        <ComposerPane actions={actions} composer={composer} status={status} />
       </Box>
     </AlternateScreen>
   )
@@ -351,6 +341,5 @@ interface StreamingAssistantProps {
   compact?: boolean
   detailsMode: DetailsMode
   progress: AppLayoutProgressProps
-  sections?: SectionVisibility
   t: Theme
 }

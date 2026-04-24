@@ -11,9 +11,9 @@ import {
 } from 'react'
 
 const ESTIMATE = 4
-const OVERSCAN = 40
-const MAX_MOUNTED = 260
-const COLD_START = 40
+const OVERSCAN = 24
+const MAX_MOUNTED = 180
+const COLD_START = 32
 const QUANTUM = OVERSCAN >> 1
 const FREEZE_RENDERS = 2
 
@@ -41,7 +41,6 @@ export function useVirtualHistory(
   const refs = useRef(new Map<string, (el: unknown) => void>())
   const [ver, setVer] = useState(0)
   const [hasScrollRef, setHasScrollRef] = useState(false)
-  const metrics = useRef({ sticky: true, top: 0, vp: 0 })
 
   // Width change: scale cached heights (not clear — clearing forces a
   // pessimistic back-walk mounting ~190 rows at once, each a fresh
@@ -72,7 +71,7 @@ export function useVirtualHistory(
 
   useSyncExternalStore(
     useCallback(
-      (cb: () => void) => (hasScrollRef ? scrollRef.current?.subscribe(cb) : null) ?? (() => () => {}),
+      (cb: () => void) => (hasScrollRef ? scrollRef.current?.subscribe(cb) : null) ?? (() => {}),
       [hasScrollRef, scrollRef]
     ),
     () => {
@@ -185,25 +184,6 @@ export function useVirtualHistory(
           heights.current.set(k, h)
           dirty = true
         }
-      }
-    }
-
-    const s = scrollRef.current
-
-    if (s) {
-      const next = {
-        sticky: s.isSticky(),
-        top: Math.max(0, s.getScrollTop() + s.getPendingDelta()),
-        vp: Math.max(0, s.getViewportHeight())
-      }
-
-      if (
-        next.sticky !== metrics.current.sticky ||
-        next.top !== metrics.current.top ||
-        next.vp !== metrics.current.vp
-      ) {
-        metrics.current = next
-        dirty = true
       }
     }
 

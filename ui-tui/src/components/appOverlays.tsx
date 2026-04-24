@@ -118,7 +118,7 @@ export function FloatingOverlays({
   return (
     <Box alignItems="flex-start" bottom="100%" flexDirection="column" left={0} position="absolute" right={0}>
       {overlay.picker && (
-        <FloatBox color={ui.theme.color.bronze}>
+        <FloatBox color={ui.theme.color.bronze} t={ui.theme}>
           <SessionPicker
             gw={gw}
             onCancel={() => patchOverlayState({ picker: false })}
@@ -129,7 +129,7 @@ export function FloatingOverlays({
       )}
 
       {overlay.modelPicker && (
-        <FloatBox color={ui.theme.color.bronze}>
+        <FloatBox color={ui.theme.color.bronze} t={ui.theme}>
           <ModelPicker
             gw={gw}
             onCancel={() => patchOverlayState({ modelPicker: false })}
@@ -147,7 +147,7 @@ export function FloatingOverlays({
       )}
 
       {overlay.pager && (
-        <FloatBox color={ui.theme.color.bronze}>
+        <FloatBox color={ui.theme.color.bronze} t={ui.theme}>
           <Box flexDirection="column" paddingX={1} paddingY={1}>
             {overlay.pager.title && (
               <Box justifyContent="center" marginBottom={1}>
@@ -173,7 +173,7 @@ export function FloatingOverlays({
       )}
 
       {!!completions.length && (
-        <FloatBox color={ui.theme.color.gold}>
+        <FloatBox color={ui.theme.color.gold} t={ui.theme}>
           <Box flexDirection="column" width={Math.max(28, cols - 6)}>
             {completions.slice(start, start + viewportSize).map((item, i) => {
               const active = start + i === compIdx

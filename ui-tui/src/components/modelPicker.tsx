@@ -1,15 +1,12 @@
-import { Box, Text, useInput, useStdout } from '@hermes/ink'
-import { useEffect, useMemo, useState } from 'react'
+import { Box, Text, useInput } from '@hermes/ink'
+import { useEffect, useState } from 'react'
 
-import { providerDisplayNames } from '../domain/providers.js'
 import type { GatewayClient } from '../gatewayClient.js'
 import type { ModelOptionProvider, ModelOptionsResponse } from '../gatewayTypes.js'
 import { asRpcResult, rpcErrorMessage } from '../lib/rpc.js'
 import type { Theme } from '../theme.js'
 
 const VISIBLE = 12
-const MIN_WIDTH = 40
-const MAX_WIDTH = 90
 
 const pageOffset = (count: number, sel: number) => Math.max(0, Math.min(sel - Math.floor(VISIBLE / 2), count - VISIBLE))
 
@@ -28,13 +25,6 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
   const [providerIdx, setProviderIdx] = useState(0)
   const [modelIdx, setModelIdx] = useState(0)
   const [stage, setStage] = useState<'model' | 'provider'>('provider')
-
-  const { stdout } = useStdout()
-  // Pin the picker to a stable width so the FloatBox parent (which shrinks-
-  // to-fit with alignSelf="flex-start") doesn't resize as long provider /
-  // model names scroll into view, and so `wrap="truncate-end"` on each row
-  // has an actual constraint to truncate against.
-  const width = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, (stdout?.columns ?? 80) - 6))
 
   useEffect(() => {
     gw.request<ModelOptionsResponse>('model.options', sessionId ? { session_id: sessionId } : {})
@@ -69,7 +59,6 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
 
   const provider = providers[providerIdx]
   const models = provider?.models ?? []
-  const names = useMemo(() => providerDisplayNames(providers), [providers])
 
   useInput((ch, key) => {
     if (key.escape) {
@@ -148,13 +137,13 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
   })
 
   if (loading) {
-    return <Text color={t.color.dim}>loading models…</Text>
+    return <Text color={t.color.panelMuted}>loading models…</Text>
   }
 
   if (err) {
     return (
       <Box flexDirection="column">
-        <Text color={t.color.label}>error: {err}</Text>
+        <Text color={t.color.error}>error: {err}</Text>
         <Text color={t.color.dim}>Esc to cancel</Text>
       </Box>
     )
@@ -171,59 +160,43 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
 
   if (stage === 'provider') {
     const rows = providers.map(
-      (p, i) => `${p.is_current ? '*' : ' '} ${names[i]} · ${p.total_models ?? p.models?.length ?? 0} models`
+      p => `${p.is_current ? '*' : ' '} ${p.name} · ${p.total_models ?? p.models?.length ?? 0} models`
     )
 
     const { items, off } = visibleItems(rows, providerIdx)
 
     return (
-      <Box flexDirection="column" width={width}>
-        <Text bold color={t.color.amber} wrap="truncate-end">
-          Select Provider
-        </Text>
+      <Box flexDirection="column">
+        <Box flexWrap="wrap" marginBottom={1}>
+          <Text backgroundColor={t.color.chipBg} color={t.color.chipText}>
+            {' '}
+            providers
+            {' '}
+          </Text>
+          <Text color={t.color.cornsilk}> choose a model source</Text>
+        </Box>
 
-        <Text color={t.color.dim} wrap="truncate-end">
-          Current model: {currentModel || '(unknown)'}
-        </Text>
-        <Text color={t.color.label} wrap="truncate-end">
-          {provider?.warning ? `warning: ${provider.warning}` : ' '}
-        </Text>
-        <Text color={t.color.dim} wrap="truncate-end">
-          {off > 0 ? ` ↑ ${off} more` : ' '}
-        </Text>
+        <Text color={t.color.panelMuted}>Current model: {currentModel || '(unknown)'}</Text>
+        {provider?.warning ? <Text color={t.color.warn}>warning: {provider.warning}</Text> : null}
+        {off > 0 && <Text color={t.color.dim}> ↑ {off} more</Text>}
 
-        {Array.from({ length: VISIBLE }, (_, i) => {
-          const row = items[i]
+        {items.map((row, i) => {
           const idx = off + i
+          const active = providerIdx === idx
 
-          return row ? (
-            <Text
-              bold={providerIdx === idx}
-              color={providerIdx === idx ? t.color.amber : t.color.dim}
-              inverse={providerIdx === idx}
-              key={providers[idx]?.slug ?? `row-${idx}`}
-              wrap="truncate-end"
-            >
-              {providerIdx === idx ? '▸ ' : '  '}
-              {i + 1}. {row}
-            </Text>
-          ) : (
-            <Text color={t.color.dim} key={`pad-${i}`} wrap="truncate-end">
-              {' '}
-            </Text>
+          return (
+            <Box backgroundColor={active ? t.color.completionCurrentBg : undefined} key={row}>
+              <Text color={active ? t.color.cornsilk : t.color.panelMuted}>
+                <Text color={active ? t.color.amber : t.color.dim}>{active ? '▸ ' : '· '}</Text>
+                {i + 1}. {row}
+              </Text>
+            </Box>
           )
         })}
 
-        <Text color={t.color.dim} wrap="truncate-end">
-          {off + VISIBLE < rows.length ? ` ↓ ${rows.length - off - VISIBLE} more` : ' '}
-        </Text>
-
-        <Text color={t.color.dim} wrap="truncate-end">
-          persist: {persistGlobal ? 'global' : 'session'} · g toggle
-        </Text>
-        <Text color={t.color.dim} wrap="truncate-end">
-          ↑/↓ select · Enter choose · 1-9,0 quick · Esc cancel
-        </Text>
+        {off + VISIBLE < rows.length && <Text color={t.color.dim}> ↓ {rows.length - off - VISIBLE} more</Text>}
+        <Text color={t.color.dim}>persist: {persistGlobal ? 'global' : 'session'} · g toggle</Text>
+        <Text color={t.color.dim}>↑/↓ select · Enter choose · 1-9,0 quick · Esc cancel</Text>
       </Box>
     )
   }
@@ -231,59 +204,37 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
   const { items, off } = visibleItems(models, modelIdx)
 
   return (
-    <Box flexDirection="column" width={width}>
-      <Text bold color={t.color.amber} wrap="truncate-end">
-        Select Model
-      </Text>
+    <Box flexDirection="column">
+      <Box flexWrap="wrap" marginBottom={1}>
+        <Text backgroundColor={t.color.chipBg} color={t.color.chipText}>
+          {' '}
+          models
+          {' '}
+        </Text>
+        <Text color={t.color.cornsilk}> {provider?.name || '(unknown provider)'}</Text>
+      </Box>
 
-      <Text color={t.color.dim} wrap="truncate-end">
-        {names[providerIdx] || '(unknown provider)'}
-      </Text>
-      <Text color={t.color.label} wrap="truncate-end">
-        {provider?.warning ? `warning: ${provider.warning}` : ' '}
-      </Text>
-      <Text color={t.color.dim} wrap="truncate-end">
-        {off > 0 ? ` ↑ ${off} more` : ' '}
-      </Text>
+      {!models.length ? <Text color={t.color.panelMuted}>no models listed for this provider</Text> : null}
+      {provider?.warning ? <Text color={t.color.warn}>warning: {provider.warning}</Text> : null}
+      {off > 0 && <Text color={t.color.dim}> ↑ {off} more</Text>}
 
-      {Array.from({ length: VISIBLE }, (_, i) => {
-        const row = items[i]
+      {items.map((row, i) => {
         const idx = off + i
-
-        if (!row) {
-          return !models.length && i === 0 ? (
-            <Text color={t.color.dim} key="empty" wrap="truncate-end">
-              no models listed for this provider
-            </Text>
-          ) : (
-            <Text color={t.color.dim} key={`pad-${i}`} wrap="truncate-end">
-              {' '}
-            </Text>
-          )
-        }
+        const active = modelIdx === idx
 
         return (
-          <Text
-            bold={modelIdx === idx}
-            color={modelIdx === idx ? t.color.amber : t.color.dim}
-            inverse={modelIdx === idx}
-            key={`${provider?.slug ?? 'prov'}:${idx}:${row}`}
-            wrap="truncate-end"
-          >
-            {modelIdx === idx ? '▸ ' : '  '}
-            {i + 1}. {row}
-          </Text>
+          <Box backgroundColor={active ? t.color.completionCurrentBg : undefined} key={row}>
+            <Text color={active ? t.color.cornsilk : t.color.panelMuted}>
+              <Text color={active ? t.color.amber : t.color.dim}>{active ? '▸ ' : '· '}</Text>
+              {i + 1}. {row}
+            </Text>
+          </Box>
         )
       })}
 
-      <Text color={t.color.dim} wrap="truncate-end">
-        {off + VISIBLE < models.length ? ` ↓ ${models.length - off - VISIBLE} more` : ' '}
-      </Text>
-
-      <Text color={t.color.dim} wrap="truncate-end">
-        persist: {persistGlobal ? 'global' : 'session'} · g toggle
-      </Text>
-      <Text color={t.color.dim} wrap="truncate-end">
+      {off + VISIBLE < models.length && <Text color={t.color.dim}> ↓ {models.length - off - VISIBLE} more</Text>}
+      <Text color={t.color.dim}>persist: {persistGlobal ? 'global' : 'session'} · g toggle</Text>
+      <Text color={t.color.dim}>
         {models.length ? '↑/↓ select · Enter switch · 1-9,0 quick · Esc back' : 'Enter/Esc back'}
       </Text>
     </Box>
