@@ -1563,13 +1563,14 @@ class APIServerAdapter(BasePlatformAdapter):
         approval_id = body.get("approval_id")
         if approval_id is not None and not isinstance(approval_id, str):
             return web.json_response({"error": "approval_id must be a string"}, status=400)
+        approval_id = approval_id.strip() if isinstance(approval_id, str) and approval_id.strip() else None
 
         try:
             from tools.approval import resolve_gateway_approval
         except ImportError:
             return web.json_response({"error": "Approval system unavailable"}, status=503)
 
-        resolved = resolve_gateway_approval(session_id, choice, resolve_all=False)
+        resolved = resolve_gateway_approval(session_id, choice, resolve_all=False, approval_id=approval_id)
         return web.json_response({"ok": True, "choice": choice, "resolved": resolved})
 
     async def _handle_get_memory(self, request: "web.Request") -> "web.Response":

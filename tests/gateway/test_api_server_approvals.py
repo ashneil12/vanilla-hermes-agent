@@ -220,7 +220,7 @@ async def test_approval_respond_validates_and_resolves_one_request():
             payload = await response.json()
 
     assert payload == {"ok": True, "choice": "once", "resolved": 1}
-    resolve.assert_called_once_with("sess-approval", "once", resolve_all=False)
+    resolve.assert_called_once_with("sess-approval", "once", resolve_all=False, approval_id="approval-1")
 
 
 @pytest.mark.asyncio
