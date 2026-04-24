@@ -1025,24 +1025,68 @@ class APIServerAdapter(BasePlatformAdapter):
             }
             _queue_event("tool.started", payload)
 
+        def _on_approval_request(approval_data):
+            if not isinstance(approval_data, dict):
+                approval_data = {"description": str(approval_data)}
+            payload = {
+                "session_id": session_id,
+                "run_id": run_id,
+                "message_id": assistant_message_id,
+                "approval_id": str(approval_data.get("approval_id") or approval_data.get("id") or ""),
+                "command": str(approval_data.get("command") or "")[:8000],
+                "description": str(approval_data.get("description") or "Command approval required")[:1000],
+                "pattern_key": str(approval_data.get("pattern_key") or ""),
+                "pattern_keys": approval_data.get("pattern_keys") if isinstance(approval_data.get("pattern_keys"), list) else [],
+            }
+            _queue_event("approval", payload)
+
         agent_ref = [None]
         loop = asyncio.get_event_loop()
 
         async def _run_agent_task():
             def _run():
-                agent = self._create_agent(
-                    ephemeral_system_prompt=system_message,
-                    session_id=session_id,
-                    stream_delta_callback=_on_delta,
-                    tool_progress_callback=_on_tool_progress,
-                )
-                agent._session_db = db
-                agent_ref[0] = agent
-                return agent.run_conversation(
-                    user_content,
-                    conversation_history=history,
-                    persist_user_message=persist_text,
-                )
+                approval_token = None
+                reset_current_session_key = None
+                unregister_gateway_notify = None
+                try:
+                    from tools.approval import (
+                        register_gateway_notify,
+                        reset_current_session_key as _reset_current_session_key,
+                        set_current_session_key,
+                        unregister_gateway_notify as _unregister_gateway_notify,
+                    )
+                    approval_token = set_current_session_key(session_id)
+                    reset_current_session_key = _reset_current_session_key
+                    unregister_gateway_notify = _unregister_gateway_notify
+                    register_gateway_notify(session_id, _on_approval_request)
+                except Exception as exc:
+                    logger.debug("[chat/stream] Approval callbacks unavailable: %s", exc)
+
+                try:
+                    agent = self._create_agent(
+                        ephemeral_system_prompt=system_message,
+                        session_id=session_id,
+                        stream_delta_callback=_on_delta,
+                        tool_progress_callback=_on_tool_progress,
+                    )
+                    agent._session_db = db
+                    agent_ref[0] = agent
+                    return agent.run_conversation(
+                        user_content,
+                        conversation_history=history,
+                        persist_user_message=persist_text,
+                    )
+                finally:
+                    if unregister_gateway_notify is not None:
+                        try:
+                            unregister_gateway_notify(session_id)
+                        except Exception as exc:
+                            logger.debug("[chat/stream] Approval callback cleanup failed: %s", exc)
+                    if approval_token is not None and reset_current_session_key is not None:
+                        try:
+                            reset_current_session_key(approval_token)
+                        except Exception as exc:
+                            logger.debug("[chat/stream] Approval session cleanup failed: %s", exc)
 
             return await loop.run_in_executor(None, _run)
 
@@ -1156,6 +1200,38 @@ class APIServerAdapter(BasePlatformAdapter):
             logger.info("Session SSE client disconnected; interrupted session %s", session_id)
 
         return response
+
+    async def _handle_approval_respond(self, request: "web.Request") -> "web.Response":
+        """POST /api/approval/respond — resolve one blocking approval request."""
+        auth_err = self._check_auth(request)
+        if auth_err:
+            return auth_err
+
+        try:
+            body = await request.json()
+        except (json.JSONDecodeError, Exception):
+            return web.json_response({"error": "Invalid JSON in request body"}, status=400)
+
+        session_id = body.get("session_id")
+        if not isinstance(session_id, str) or not session_id.strip():
+            return web.json_response({"error": "session_id is required"}, status=400)
+        session_id = session_id.strip()
+
+        choice = body.get("choice", "deny")
+        if choice not in ("once", "session", "always", "deny"):
+            return web.json_response({"error": f"Invalid choice: {choice}"}, status=400)
+
+        approval_id = body.get("approval_id")
+        if approval_id is not None and not isinstance(approval_id, str):
+            return web.json_response({"error": "approval_id must be a string"}, status=400)
+
+        try:
+            from tools.approval import resolve_gateway_approval
+        except ImportError:
+            return web.json_response({"error": "Approval system unavailable"}, status=503)
+
+        resolved = resolve_gateway_approval(session_id, choice, resolve_all=False)
+        return web.json_response({"ok": True, "choice": choice, "resolved": resolved})
 
     async def _handle_get_memory(self, request: "web.Request") -> "web.Response":
         """GET /api/memory — read current memory state."""
@@ -3122,6 +3198,7 @@ class APIServerAdapter(BasePlatformAdapter):
             self._app.router.add_post("/api/sessions/{session_id}/fork", self._handle_fork_session)
             self._app.router.add_post("/api/sessions/{session_id}/chat", self._handle_session_chat)
             self._app.router.add_post("/api/sessions/{session_id}/chat/stream", self._handle_session_chat_stream)
+            self._app.router.add_post("/api/approval/respond", self._handle_approval_respond)
             self._app.router.add_get("/api/memory", self._handle_get_memory)
             self._app.router.add_post("/api/memory", self._handle_add_memory)
             self._app.router.add_patch("/api/memory", self._handle_replace_memory)
