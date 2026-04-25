@@ -41,6 +41,16 @@ if [ "$(id -u)" = "0" ]; then
             echo "Warning: chown failed (rootless container?) — continuing anyway"
     fi
 
+    # Single-file bind mounts can hide root-owned host files inside an otherwise
+    # hermes-owned data dir. Repair those before dropping privileges; after gosu
+    # an ordinary user cannot chown even a file it can read.
+    for managed_file in "$HERMES_HOME/.env" "$HERMES_HOME/config.yaml" "$HERMES_HOME/SOUL.md" "$HERMES_HOME/honcho.json"; do
+        if [ -f "$managed_file" ]; then
+            chown hermes:hermes "$managed_file" 2>/dev/null || \
+                echo "Warning: could not chown $managed_file before privilege drop"
+        fi
+    done
+
     echo "Dropping root privileges"
     exec gosu hermes "$0" "$@"
 fi
@@ -70,8 +80,8 @@ fi
 # Ensure the main config file remains accessible to the hermes runtime user
 # even if it was edited on the host after initial ownership setup.
 if [ -f "$HERMES_HOME/config.yaml" ]; then
-    chown hermes:hermes "$HERMES_HOME/config.yaml"
-    chmod 640 "$HERMES_HOME/config.yaml"
+    chmod 640 "$HERMES_HOME/config.yaml" 2>/dev/null || \
+        echo "Warning: could not chmod $HERMES_HOME/config.yaml"
 fi
 
 # SOUL.md
