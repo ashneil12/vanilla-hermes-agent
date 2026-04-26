@@ -57,6 +57,13 @@ from tools.skills_tool import skill_view, skills_categories, skills_list
 logger = logging.getLogger(__name__)
 
 CHAT_STREAM_HEARTBEAT_SECONDS = 15.0
+RUNTIME_GOVERNOR_POLL_SECONDS = 5.0
+RUNTIME_GOVERNOR_UNAVAILABLE_MESSAGE = (
+    "HermesOS runtime limits could not be verified. Try again in a moment."
+)
+RUNTIME_GOVERNOR_LIMIT_MESSAGE = (
+    "HermesOS runtime limit reached. Upgrade or wait for your allowance to reset."
+)
 
 
 def _encode_dashboard_sse(event_name: str, payload: Dict[str, Any]) -> bytes:
@@ -669,6 +676,243 @@ class APIServerAdapter(BasePlatformAdapter):
 
         return "*" in self._cors_origins or origin in self._cors_origins
 
+    @staticmethod
+    def _runtime_limit_result(message: str, *, reason: str = "runtime_limit") -> Dict[str, Any]:
+        text = message or RUNTIME_GOVERNOR_LIMIT_MESSAGE
+        return {
+            "final_response": text,
+            "messages": [],
+            "api_calls": 0,
+            "completed": False,
+            "partial": True,
+            "interrupted": True,
+            "failed": True,
+            "runtime_cutoff": True,
+            "runtime_reason": reason,
+        }
+
+    @staticmethod
+    def _zero_usage() -> Dict[str, int]:
+        return {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+
+    @staticmethod
+    def _runtime_session_key(surface: str, session_id: Optional[str]) -> str:
+        safe_surface = str(surface or "api").strip() or "api"
+        safe_session = str(session_id or "default").strip() or "default"
+        return f"api_server:{safe_surface}:{safe_session}"
+
+    def _admit_runtime_governor(
+        self,
+        *,
+        surface: str,
+        session_id: Optional[str],
+        source_message_id: str,
+        message_preview: str,
+    ) -> Dict[str, Any]:
+        try:
+            from gateway.runtime_governor import (
+                DEFAULT_UNAVAILABLE_MESSAGE,
+                RuntimeGovernorError,
+                get_runtime_governor,
+            )
+
+            governor = get_runtime_governor()
+            decision = governor.admit(
+                platform="web" if surface.startswith("session") else "api_server",
+                session_key=self._runtime_session_key(surface, session_id),
+                source_message_id=source_message_id,
+                message_preview=message_preview[:500],
+            )
+            if not decision.allowed:
+                return {
+                    "allowed": False,
+                    "governor": governor,
+                    "lease_id": None,
+                    "reason": decision.reason or "denied",
+                    "user_message": decision.user_message or DEFAULT_UNAVAILABLE_MESSAGE,
+                }
+            lease_id = decision.lease_id
+            if lease_id:
+                try:
+                    governor.start(lease_id)
+                except RuntimeGovernorError as exc:
+                    return {
+                        "allowed": False,
+                        "governor": governor,
+                        "lease_id": None,
+                        "reason": "policy_unavailable",
+                        "user_message": exc.user_message,
+                    }
+            return {
+                "allowed": True,
+                "governor": governor,
+                "lease_id": lease_id,
+                "reason": decision.reason or "allowed",
+                "user_message": "",
+            }
+        except Exception as exc:
+            logger.warning(
+                "[api_server] runtime governor admission failed closed for %s/%s: %s",
+                surface,
+                session_id or "",
+                exc.__class__.__name__,
+            )
+            return {
+                "allowed": False,
+                "governor": None,
+                "lease_id": None,
+                "reason": "policy_unavailable",
+                "user_message": RUNTIME_GOVERNOR_UNAVAILABLE_MESSAGE,
+            }
+
+    @staticmethod
+    def _runtime_heartbeat(
+        *,
+        governor: Any,
+        lease_id: Optional[str],
+        agent_ref: List[Any],
+        cutoff_state: Dict[str, Any],
+    ) -> None:
+        if not governor or not lease_id or cutoff_state.get("cutoff"):
+            return
+        try:
+            heartbeat = governor.heartbeat(lease_id)
+            should_stop = bool(getattr(heartbeat, "should_stop", False))
+            user_message = str(getattr(heartbeat, "user_message", "") or "")
+            reason = str(getattr(heartbeat, "reason", "") or "")
+        except Exception as exc:
+            logger.warning("[api_server] runtime governor heartbeat failed closed: %s", exc.__class__.__name__)
+            should_stop = True
+            user_message = RUNTIME_GOVERNOR_UNAVAILABLE_MESSAGE
+            reason = "policy_unavailable"
+        if not should_stop:
+            return
+        cutoff_state["cutoff"] = True
+        cutoff_state["message"] = user_message or RUNTIME_GOVERNOR_LIMIT_MESSAGE
+        cutoff_state["reason"] = reason or "runtime_cutoff"
+        agent = agent_ref[0] if agent_ref else None
+        if agent is not None and hasattr(agent, "interrupt"):
+            try:
+                agent.interrupt(cutoff_state["message"])
+            except Exception as exc:
+                logger.debug("[api_server] runtime governor interrupt failed: %s", exc)
+
+    def _install_runtime_step_callback(
+        self,
+        agent: Any,
+        *,
+        governor: Any,
+        lease_id: Optional[str],
+        agent_ref: List[Any],
+        cutoff_state: Dict[str, Any],
+    ) -> None:
+        if not governor or not lease_id:
+            return
+        previous = getattr(agent, "step_callback", None)
+
+        def _runtime_step_callback(iteration, prev_tools):
+            self._runtime_heartbeat(
+                governor=governor,
+                lease_id=lease_id,
+                agent_ref=agent_ref,
+                cutoff_state=cutoff_state,
+            )
+            if callable(previous):
+                return previous(iteration, prev_tools)
+            return None
+
+        try:
+            agent.step_callback = _runtime_step_callback
+        except Exception as exc:
+            logger.debug("[api_server] failed to install runtime step callback: %s", exc)
+
+    async def _await_runtime_guarded(
+        self,
+        future: "asyncio.Future",
+        *,
+        governor: Any,
+        lease_id: Optional[str],
+        agent_ref: List[Any],
+        cutoff_state: Dict[str, Any],
+        cutoff_factory: Optional[Any] = None,
+    ) -> Any:
+        if not governor or not lease_id:
+            return await future
+
+        while True:
+            done, _ = await asyncio.wait({future}, timeout=RUNTIME_GOVERNOR_POLL_SECONDS)
+            if done:
+                return future.result()
+            self._runtime_heartbeat(
+                governor=governor,
+                lease_id=lease_id,
+                agent_ref=agent_ref,
+                cutoff_state=cutoff_state,
+            )
+            if cutoff_state.get("cutoff"):
+                cutoff_result = self._runtime_limit_result(
+                    str(cutoff_state.get("message") or ""),
+                    reason=str(cutoff_state.get("reason") or "runtime_cutoff"),
+                )
+                if cutoff_factory is not None:
+                    return cutoff_factory(cutoff_result)
+                return (cutoff_result, self._zero_usage())
+
+    @staticmethod
+    def _close_runtime_lease(governor: Any, lease_id: Optional[str], *, result: Optional[Dict[str, Any]], error: bool = False) -> None:
+        if not governor or not lease_id:
+            return
+        try:
+            if result and result.get("runtime_cutoff"):
+                governor.fail(lease_id, reason=str(result.get("runtime_reason") or "runtime_cutoff"))
+            elif error or (result and result.get("failed")):
+                governor.fail(lease_id, reason="agent_error")
+            else:
+                governor.finish(lease_id, reason="agent_end")
+        except Exception as exc:
+            logger.warning("[api_server] runtime governor lease close failed: %s", exc.__class__.__name__)
+
+    async def _run_agent_with_runtime(
+        self,
+        *,
+        surface: str,
+        runtime_session_id: Optional[str],
+        source_message_id: str,
+        message_preview: str,
+        **run_kwargs,
+    ) -> tuple:
+        admission = self._admit_runtime_governor(
+            surface=surface,
+            session_id=runtime_session_id,
+            source_message_id=source_message_id,
+            message_preview=message_preview,
+        )
+        if not admission.get("allowed"):
+            return (
+                self._runtime_limit_result(
+                    str(admission.get("user_message") or ""),
+                    reason=str(admission.get("reason") or "denied"),
+                ),
+                self._zero_usage(),
+            )
+
+        governor = admission.get("governor")
+        lease_id = admission.get("lease_id")
+        result: Optional[Dict[str, Any]] = None
+        try:
+            result, usage = await self._run_agent(
+                **run_kwargs,
+                runtime_governor=governor,
+                runtime_lease_id=lease_id,
+            )
+            return result, usage
+        except Exception:
+            self._close_runtime_lease(governor, lease_id, result=result, error=True)
+            raise
+        finally:
+            if result is not None:
+                self._close_runtime_lease(governor, lease_id, result=result)
+
     # ------------------------------------------------------------------
     # Auth helper
     # ------------------------------------------------------------------
@@ -1099,6 +1343,13 @@ class APIServerAdapter(BasePlatformAdapter):
         system_message = body.get("system_message")
         history = db.get_messages_as_conversation(session_id)
         loop = asyncio.get_event_loop()
+        run_id = f"run_{uuid.uuid4().hex}"
+        admission = self._admit_runtime_governor(
+            surface="session_chat",
+            session_id=session_id,
+            source_message_id=run_id,
+            message_preview=message,
+        )
 
         def _run():
             agent = self._create_agent(
@@ -1106,6 +1357,14 @@ class APIServerAdapter(BasePlatformAdapter):
                 session_id=session_id,
             )
             agent._session_db = db
+            agent_ref[0] = agent
+            self._install_runtime_step_callback(
+                agent,
+                governor=governor,
+                lease_id=lease_id,
+                agent_ref=agent_ref,
+                cutoff_state=cutoff_state,
+            )
             result = agent.run_conversation(
                 user_content,
                 conversation_history=history,
@@ -1118,15 +1377,38 @@ class APIServerAdapter(BasePlatformAdapter):
             }
             return result, usage
 
-        try:
-            result, usage = await loop.run_in_executor(None, _run)
-        except Exception as e:
-            logger.error("Error running session chat for %s: %s", session_id, e, exc_info=True)
-            return web.json_response({"error": str(e)}, status=500)
+        if not admission.get("allowed"):
+            result = self._runtime_limit_result(
+                str(admission.get("user_message") or ""),
+                reason=str(admission.get("reason") or "denied"),
+            )
+            usage = self._zero_usage()
+        else:
+            governor = admission.get("governor")
+            lease_id = admission.get("lease_id")
+            agent_ref: List[Any] = [None]
+            cutoff_state: Dict[str, Any] = {}
+            result: Optional[Dict[str, Any]] = None
+            try:
+                future = asyncio.ensure_future(loop.run_in_executor(None, _run))
+                result, usage = await self._await_runtime_guarded(
+                    future,
+                    governor=governor,
+                    lease_id=lease_id,
+                    agent_ref=agent_ref,
+                    cutoff_state=cutoff_state,
+                )
+            except Exception as e:
+                self._close_runtime_lease(governor, lease_id, result=result, error=True)
+                logger.error("Error running session chat for %s: %s", session_id, e, exc_info=True)
+                return web.json_response({"error": str(e)}, status=500)
+            finally:
+                if result is not None:
+                    self._close_runtime_lease(governor, lease_id, result=result)
 
         return web.json_response({
             "session_id": session_id,
-            "run_id": f"run_{uuid.uuid4().hex}",
+            "run_id": run_id,
             "model": model,
             "final_response": result.get("final_response"),
             "completed": result.get("completed", False),
@@ -1252,6 +1534,23 @@ class APIServerAdapter(BasePlatformAdapter):
         loop = asyncio.get_event_loop()
 
         async def _run_agent_task():
+            admission = self._admit_runtime_governor(
+                surface="session_chat_stream",
+                session_id=session_id,
+                source_message_id=run_id,
+                message_preview=message,
+            )
+            if not admission.get("allowed"):
+                return self._runtime_limit_result(
+                    str(admission.get("user_message") or ""),
+                    reason=str(admission.get("reason") or "denied"),
+                )
+
+            governor = admission.get("governor")
+            lease_id = admission.get("lease_id")
+            cutoff_state: Dict[str, Any] = {}
+            result: Optional[Dict[str, Any]] = None
+
             def _run():
                 approval_token = None
                 reset_current_session_key = None
@@ -1279,6 +1578,13 @@ class APIServerAdapter(BasePlatformAdapter):
                     )
                     agent._session_db = db
                     agent_ref[0] = agent
+                    self._install_runtime_step_callback(
+                        agent,
+                        governor=governor,
+                        lease_id=lease_id,
+                        agent_ref=agent_ref,
+                        cutoff_state=cutoff_state,
+                    )
                     return agent.run_conversation(
                         user_content,
                         conversation_history=history,
@@ -1296,7 +1602,23 @@ class APIServerAdapter(BasePlatformAdapter):
                         except Exception as exc:
                             logger.debug("[chat/stream] Approval session cleanup failed: %s", exc)
 
-            return await loop.run_in_executor(None, _run)
+            try:
+                future = asyncio.ensure_future(loop.run_in_executor(None, _run))
+                result = await self._await_runtime_guarded(
+                    future,
+                    governor=governor,
+                    lease_id=lease_id,
+                    agent_ref=agent_ref,
+                    cutoff_state=cutoff_state,
+                    cutoff_factory=lambda cutoff_result: cutoff_result,
+                )
+                return result
+            except Exception:
+                self._close_runtime_lease(governor, lease_id, result=result, error=True)
+                raise
+            finally:
+                if result is not None:
+                    self._close_runtime_lease(governor, lease_id, result=result)
 
         agent_task = asyncio.ensure_future(_run_agent_task())
 
@@ -1764,6 +2086,23 @@ class APIServerAdapter(BasePlatformAdapter):
         _queue_event("message.started", {"session_id": session_id, "stream_id": stream_id, "run_id": run_id, "message": {"id": assistant_message_id, "role": "assistant"}})
 
         async def _run_agent_task():
+            admission = self._admit_runtime_governor(
+                surface="session_chat_start",
+                session_id=session_id,
+                source_message_id=run_id,
+                message_preview=message,
+            )
+            if not admission.get("allowed"):
+                return self._runtime_limit_result(
+                    str(admission.get("user_message") or ""),
+                    reason=str(admission.get("reason") or "denied"),
+                )
+
+            governor = admission.get("governor")
+            lease_id = admission.get("lease_id")
+            cutoff_state: Dict[str, Any] = {}
+            result: Optional[Dict[str, Any]] = None
+
             def _run():
                 approval_token = None
                 reset_current_session_key = None
@@ -1796,6 +2135,13 @@ class APIServerAdapter(BasePlatformAdapter):
                     )
                     agent._session_db = db
                     agent_ref[0] = agent
+                    self._install_runtime_step_callback(
+                        agent,
+                        governor=governor,
+                        lease_id=lease_id,
+                        agent_ref=agent_ref,
+                        cutoff_state=cutoff_state,
+                    )
                     return agent.run_conversation(
                         user_content,
                         conversation_history=history,
@@ -1813,7 +2159,23 @@ class APIServerAdapter(BasePlatformAdapter):
                         except Exception as exc:
                             logger.debug("[chat/start] Approval session cleanup failed: %s", exc)
 
-            return await loop.run_in_executor(None, _run)
+            try:
+                future = asyncio.ensure_future(loop.run_in_executor(None, _run))
+                result = await self._await_runtime_guarded(
+                    future,
+                    governor=governor,
+                    lease_id=lease_id,
+                    agent_ref=agent_ref,
+                    cutoff_state=cutoff_state,
+                    cutoff_factory=lambda cutoff_result: cutoff_result,
+                )
+                return result
+            except Exception:
+                self._close_runtime_lease(governor, lease_id, result=result, error=True)
+                raise
+            finally:
+                if result is not None:
+                    self._close_runtime_lease(governor, lease_id, result=result)
 
         async def _finish_stream():
             try:
@@ -2435,7 +2797,11 @@ class APIServerAdapter(BasePlatformAdapter):
             # Start agent in background.  agent_ref is a mutable container
             # so the SSE writer can interrupt the agent on client disconnect.
             agent_ref = [None]
-            agent_task = asyncio.ensure_future(self._run_agent(
+            agent_task = asyncio.ensure_future(self._run_agent_with_runtime(
+                surface="chat_completions_stream",
+                runtime_session_id=session_id,
+                source_message_id=completion_id,
+                message_preview=str(user_message),
                 user_message=user_message,
                 conversation_history=history,
                 ephemeral_system_prompt=system_prompt,
@@ -2452,7 +2818,11 @@ class APIServerAdapter(BasePlatformAdapter):
 
         # Non-streaming: run the agent (with optional Idempotency-Key)
         async def _compute_completion():
-            return await self._run_agent(
+            return await self._run_agent_with_runtime(
+                surface="chat_completions",
+                runtime_session_id=session_id,
+                source_message_id=completion_id,
+                message_preview=str(user_message),
                 user_message=user_message,
                 conversation_history=history,
                 ephemeral_system_prompt=system_prompt,
@@ -3180,6 +3550,7 @@ class APIServerAdapter(BasePlatformAdapter):
             # agent runs so frontends can render text deltas and tool
             # calls in real time.  See _write_sse_responses for details.
             import queue as _q
+            response_id = f"resp_{uuid.uuid4().hex[:28]}"
             _stream_q: _q.Queue = _q.Queue()
 
             def _on_delta(delta):
@@ -3216,7 +3587,11 @@ class APIServerAdapter(BasePlatformAdapter):
                 }))
 
             agent_ref = [None]
-            agent_task = asyncio.ensure_future(self._run_agent(
+            agent_task = asyncio.ensure_future(self._run_agent_with_runtime(
+                surface="responses_stream",
+                runtime_session_id=session_id,
+                source_message_id=response_id,
+                message_preview=str(user_message),
                 user_message=user_message,
                 conversation_history=conversation_history,
                 ephemeral_system_prompt=instructions,
@@ -3228,7 +3603,6 @@ class APIServerAdapter(BasePlatformAdapter):
                 agent_ref=agent_ref,
             ))
 
-            response_id = f"resp_{uuid.uuid4().hex[:28]}"
             model_name = body.get("model", self._model_name)
             created_at = int(time.time())
 
@@ -3249,7 +3623,11 @@ class APIServerAdapter(BasePlatformAdapter):
             )
 
         async def _compute_response():
-            return await self._run_agent(
+            return await self._run_agent_with_runtime(
+                surface="responses",
+                runtime_session_id=session_id,
+                source_message_id=f"resp_{uuid.uuid4().hex[:28]}",
+                message_preview=str(user_message),
                 user_message=user_message,
                 conversation_history=conversation_history,
                 ephemeral_system_prompt=instructions,
@@ -3650,6 +4028,8 @@ class APIServerAdapter(BasePlatformAdapter):
         tool_start_callback=None,
         tool_complete_callback=None,
         agent_ref: Optional[list] = None,
+        runtime_governor=None,
+        runtime_lease_id: Optional[str] = None,
     ) -> tuple:
         """
         Create an agent and run a conversation in a thread executor.
@@ -3663,6 +4043,8 @@ class APIServerAdapter(BasePlatformAdapter):
         another thread to stop in-progress LLM calls.
         """
         loop = asyncio.get_running_loop()
+        effective_agent_ref = agent_ref if agent_ref is not None else [None]
+        cutoff_state: Dict[str, Any] = {"cutoff": False, "message": "", "reason": ""}
 
         def _run():
             agent = self._create_agent(
@@ -3673,8 +4055,14 @@ class APIServerAdapter(BasePlatformAdapter):
                 tool_start_callback=tool_start_callback,
                 tool_complete_callback=tool_complete_callback,
             )
-            if agent_ref is not None:
-                agent_ref[0] = agent
+            effective_agent_ref[0] = agent
+            self._install_runtime_step_callback(
+                agent,
+                governor=runtime_governor,
+                lease_id=runtime_lease_id,
+                agent_ref=effective_agent_ref,
+                cutoff_state=cutoff_state,
+            )
             result = agent.run_conversation(
                 user_message=user_message,
                 conversation_history=conversation_history,
@@ -3687,7 +4075,14 @@ class APIServerAdapter(BasePlatformAdapter):
             }
             return result, usage
 
-        return await loop.run_in_executor(None, _run)
+        future = asyncio.ensure_future(loop.run_in_executor(None, _run))
+        return await self._await_runtime_guarded(
+            future,
+            governor=runtime_governor,
+            lease_id=runtime_lease_id,
+            agent_ref=effective_agent_ref,
+            cutoff_state=cutoff_state,
+        )
 
     # ------------------------------------------------------------------
     # /v1/runs — structured event streaming

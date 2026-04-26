@@ -4,6 +4,7 @@ import asyncio
 import json
 import threading
 import time
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -116,6 +117,16 @@ class _TuiRuntimeFakeAgent:
             "messages": [],
             "api_calls": 1,
         }
+
+
+class _DenyRuntimeGovernor:
+    def admit(self, **kwargs):
+        return SimpleNamespace(
+            allowed=False,
+            reason="daily_cap",
+            user_message="Runtime limit reached in dashboard test.",
+            lease_id=None,
+        )
 
 
 def _make_adapter(api_key: str = "") -> APIServerAdapter:
@@ -239,6 +250,32 @@ async def test_backend_owned_stream_sends_heartbeat_while_agent_is_quiet(monkeyp
                 attached.close()
 
     assert any("event: heartbeat" in block for block in blocks)
+
+
+@pytest.mark.asyncio
+async def test_backend_owned_stream_returns_runtime_limit_message_without_agent():
+    adapter = _make_adapter()
+    app = _create_app(adapter)
+
+    with (
+        patch("gateway.runtime_governor.get_runtime_governor", return_value=_DenyRuntimeGovernor()),
+        patch.object(adapter, "_get_session_db", return_value=_FakeSessionDb()),
+        patch.object(adapter, "_create_agent") as create_agent,
+    ):
+        async with TestClient(TestServer(app)) as cli:
+            started = await cli.post(
+                "/api/sessions/sess-runtime-denied/chat/start",
+                json={"message": "run a capped task"},
+            )
+            stream_id = (await started.json())["stream_id"]
+            attached = await cli.get(f"/api/chat/stream?stream_id={stream_id}")
+            body = await attached.text()
+
+    assert attached.status == 200
+    assert "Runtime limit reached in dashboard test." in body
+    assert "event: assistant.completed" in body
+    assert "event: run.completed" in body
+    create_agent.assert_not_called()
 
 
 @pytest.mark.asyncio
