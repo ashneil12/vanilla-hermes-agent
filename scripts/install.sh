@@ -26,8 +26,13 @@ NC='\033[0m' # No Color
 BOLD='\033[1m'
 
 # Configuration
-REPO_URL_SSH="git@github.com:NousResearch/hermes-agent.git"
-REPO_URL_HTTPS="https://github.com/NousResearch/hermes-agent.git"
+# Default to ash's fork — this fork carries the runtime governor, the
+# auth.json read-block, the Qwen WAF bypass, the docker-entrypoint
+# chown fix, the heartbeat fix, and other production patches that aren't
+# in upstream NousResearch yet. Override with HERMES_AGENT_REPO_HTTPS /
+# HERMES_AGENT_REPO_SSH env vars if you need vanilla upstream.
+REPO_URL_SSH="${HERMES_AGENT_REPO_SSH:-git@github.com:ashneil12/vanilla-hermes-agent.git}"
+REPO_URL_HTTPS="${HERMES_AGENT_REPO_HTTPS:-https://github.com/ashneil12/vanilla-hermes-agent.git}"
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 INSTALL_DIR="${HERMES_INSTALL_DIR:-$HERMES_HOME/hermes-agent}"
 PYTHON_VERSION="3.11"
@@ -36,7 +41,7 @@ NODE_VERSION="22"
 # Options
 USE_VENV=true
 RUN_SETUP=true
-BRANCH="main"
+BRANCH="${HERMES_AGENT_BRANCH:-codex/runtime-governor-hooks}"
 
 # Detect non-interactive mode (e.g. curl | bash)
 # When stdin is not a terminal, read -p will fail with EOF,
