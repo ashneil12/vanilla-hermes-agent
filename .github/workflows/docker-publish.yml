@@ -89,8 +89,12 @@ jobs:
           push: true
           provenance: false
           platforms: linux/amd64,linux/arm64
+          # :stable is the floating tag the Hermesdeploy dashboard pulls from —
+          # both the manual "Update" button and the daily auto-update timer
+          # reference :stable, so every push to main needs to move it.
           tags: |
             ghcr.io/ashneil12/vanilla-hermes-agent:latest
+            ghcr.io/ashneil12/vanilla-hermes-agent:stable
             ghcr.io/ashneil12/vanilla-hermes-agent:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
