@@ -65,6 +65,18 @@ _HERMES_CORE_TOOLS = [
     # zero schema footprint. Gated via check_fn in tools/kanban_tools.py.
     "kanban_show", "kanban_complete", "kanban_block", "kanban_heartbeat",
     "kanban_comment", "kanban_create", "kanban_link",
+    # Browser sidecar — only in schema when the user opted in AND the
+    # Hermesdeploy-provisioned sidecar container is reachable (check_fn
+    # in tools/browser_sidecar.py probes /health). Listed here so the
+    # platform-tool resolver in hermes_cli/tools_config.py can detect
+    # the toolset as a subset of platform composites; absence of the
+    # sidecar simply makes these tools invisible to the LLM at runtime.
+    "browser_session_start", "browser_session_end",
+    "browser_goto",
+    "browser_click_text", "browser_click_selector", "browser_fill",
+    "browser_wait_for", "browser_assert_visible", "browser_get_text",
+    "browser_screenshot",
+    "browser_run_named_flow",
 ]
 
 
