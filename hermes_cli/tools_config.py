@@ -79,7 +79,14 @@ CONFIGURABLE_TOOLSETS = [
 # Toolsets that are OFF by default for new installs.
 # They're still in _HERMES_CORE_TOOLS (available at runtime if enabled),
 # but the setup checklist won't pre-select them for first-time users.
-_DEFAULT_OFF_TOOLSETS = {"moa", "homeassistant", "rl", "spotify", "discord", "discord_admin", "browser_sidecar"}
+_DEFAULT_OFF_TOOLSETS = {"moa", "homeassistant", "rl", "spotify", "discord", "discord_admin"}
+# browser_sidecar is intentionally NOT in _DEFAULT_OFF_TOOLSETS. Its check_fn
+# (tools/browser_sidecar.py:_is_sidecar_available) already gates each tool on
+# the dashboard-provisioned sidecar's /health endpoint returning tier_ok=true,
+# so instances without the sidecar container simply don't see the tools at
+# runtime. Adding it here would force users to manually opt-in via
+# `hermes tools` even on instances where the dashboard has provisioned the
+# sidecar — that's a poor handoff between dashboard and CLI.
 
 # Platform-scoped toolsets: only appear in the `hermes tools` checklist for
 # these platforms, and only resolve/save for these platforms.  A toolset
