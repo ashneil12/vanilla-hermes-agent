@@ -838,12 +838,13 @@ def build_bankr_wallet_prompt() -> str:
     address_line = f" Address: {wallet_address}." if wallet_address else ""
     return (
         "# Bankr wallet\n"
-        "lightweight runtime note: this agent has a Bankr-managed Base wallet "
+        "This agent has a Bankr-managed wallet on Base "
         "when BANKR_API_KEY/BANKR_AGENT_API_KEY and "
         "BANKR_WALLET_ADDRESS/BANKR_AGENT_WALLET_ADDRESS are present."
         f"{address_line}\n"
-        "For wallet, crypto, x402, token, deposit, transfer, or Base questions, "
-        "load the relevant wallet or Bankr skill with skill_view and follow it. "
+        "Use the installed Bankr skills selectively. For wallet, crypto, x402, "
+        "token, deposit, transfer, or Base questions, load the relevant wallet "
+        "or Bankr skill with skill_view and follow it. "
         "Do not load wallet skills unless they are relevant.\n"
         "Do not include API key values in responses. V1 wallet support is Base-only."
     )
