@@ -146,6 +146,30 @@ TOOLSETS = {
         ],
         "includes": []
     },
+
+    # Browser sidecar — Pro-tier-gated Hermes deployment provisions a
+    # deterministic Playwright HTTP service (services/browser-sidecar/) on the
+    # agent VM. These 11 primitives are the deterministic counterpart to the
+    # generic "browser" toolset above: they don't compete with or replace
+    # browser_navigate/etc., they're scripted-flow primitives for QA agents.
+    # check_fn on each tool gates on /health, so when the sidecar isn't
+    # provisioned the toolset is just absent from the schema.
+    "browser_sidecar": {
+        "description": (
+            "Deterministic Playwright primitives for QA agents (e.g., Vex). "
+            "Persistent auth across sessions; re-seed via the dashboard if "
+            "SESSION_EXPIRED. Pro-tier feature."
+        ),
+        "tools": [
+            "browser_session_start", "browser_session_end",
+            "browser_goto",
+            "browser_click_text", "browser_click_selector", "browser_fill",
+            "browser_wait_for", "browser_assert_visible", "browser_get_text",
+            "browser_screenshot",
+            "browser_run_named_flow",
+        ],
+        "includes": []
+    },
     
     "cronjob": {
         "description": "Cronjob management tool - create, list, update, pause, resume, remove, and trigger scheduled tasks",
