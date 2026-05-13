@@ -1080,12 +1080,20 @@ def _pool_may_recover_from_rate_limit(
 
 def _qwen_portal_headers() -> dict:
     """Return default HTTP headers required by Qwen Portal API."""
-    _ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    _ua = "QwenCode/0.11.1 (linux; x64)"
     return {
         "User-Agent": _ua,
         "X-DashScope-CacheControl": "enable",
         "X-DashScope-UserAgent": _ua,
         "X-DashScope-AuthType": "qwen-oauth",
+        "X-Stainless-Arch": "x64",
+        "X-Stainless-Lang": "js",
+        "X-Stainless-Os": "Linux",
+        "X-Stainless-Package-Version": "5.11.0",
+        "X-Stainless-Retry-Count": "1",
+        "X-Stainless-Runtime": "node",
+        "X-Stainless-Runtime-Version": "v18.19.1",
+        "Sec-Fetch-Mode": "cors"
     }
 
 

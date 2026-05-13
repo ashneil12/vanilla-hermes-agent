@@ -1622,7 +1622,7 @@ def _refresh_qwen_cli_tokens(tokens: Dict[str, Any], timeout_seconds: float = 20
             headers={
                 "Content-Type": "application/x-www-form-urlencoded",
                 "Accept": "application/json",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                "User-Agent": "QwenCode/0.11.1 (linux; x64)"
             },
             data={
                 "grant_type": "refresh_token",
