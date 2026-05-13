@@ -534,28 +534,111 @@ def _handle_run_named_flow(args: Dict[str, Any], **_) -> str:
 # ===========================================================================
 # Registration
 # ===========================================================================
+#
+# Each registry.register(...) below is a top-level ast.Expr statement (NOT
+# inside a for-loop or function call). This matters because the agent's
+# tools/registry.py:_module_registers_tools() uses AST analysis to detect
+# whether a module registers tools, and only matches statements of shape
+# `Expr(Call(Attribute(Name("registry"), "register"), ...))` at module body
+# level. A for-loop wrapping these calls would be ast.For — discovery would
+# skip the module silently and the toolset would never appear in the schema.
+# Keep these as explicit top-level calls.
 
-_TOOLS = [
-    ("browser_session_start", SESSION_START_SCHEMA, _handle_session_start, "🪪"),
-    ("browser_session_end", SESSION_END_SCHEMA, _handle_session_end, "🚪"),
-    ("browser_goto", GOTO_SCHEMA, _handle_goto, "🌐"),
-    ("browser_click_text", CLICK_TEXT_SCHEMA, _handle_click_text, "🖱️"),
-    ("browser_click_selector", CLICK_SELECTOR_SCHEMA, _handle_click_selector, "🖱️"),
-    ("browser_fill", FILL_SCHEMA, _handle_fill, "⌨️"),
-    ("browser_wait_for", WAIT_FOR_SCHEMA, _handle_wait_for, "⏳"),
-    ("browser_assert_visible", ASSERT_VISIBLE_SCHEMA, _handle_assert_visible, "👁️"),
-    ("browser_get_text", GET_TEXT_SCHEMA, _handle_get_text, "📄"),
-    ("browser_screenshot", SCREENSHOT_SCHEMA, _handle_screenshot, "📸"),
-    ("browser_run_named_flow", RUN_NAMED_FLOW_SCHEMA, _handle_run_named_flow, "🎬"),
-]
+registry.register(
+    name="browser_session_start",
+    toolset="browser_sidecar",
+    schema=SESSION_START_SCHEMA,
+    handler=_handle_session_start,
+    check_fn=_is_sidecar_available,
+    emoji="🪪",
+)
 
+registry.register(
+    name="browser_session_end",
+    toolset="browser_sidecar",
+    schema=SESSION_END_SCHEMA,
+    handler=_handle_session_end,
+    check_fn=_is_sidecar_available,
+    emoji="🚪",
+)
 
-for _name, _schema, _handler, _emoji in _TOOLS:
-    registry.register(
-        name=_name,
-        toolset="browser_sidecar",
-        schema=_schema,
-        handler=_handler,
-        check_fn=_is_sidecar_available,
-        emoji=_emoji,
-    )
+registry.register(
+    name="browser_goto",
+    toolset="browser_sidecar",
+    schema=GOTO_SCHEMA,
+    handler=_handle_goto,
+    check_fn=_is_sidecar_available,
+    emoji="🌐",
+)
+
+registry.register(
+    name="browser_click_text",
+    toolset="browser_sidecar",
+    schema=CLICK_TEXT_SCHEMA,
+    handler=_handle_click_text,
+    check_fn=_is_sidecar_available,
+    emoji="🖱️",
+)
+
+registry.register(
+    name="browser_click_selector",
+    toolset="browser_sidecar",
+    schema=CLICK_SELECTOR_SCHEMA,
+    handler=_handle_click_selector,
+    check_fn=_is_sidecar_available,
+    emoji="🖱️",
+)
+
+registry.register(
+    name="browser_fill",
+    toolset="browser_sidecar",
+    schema=FILL_SCHEMA,
+    handler=_handle_fill,
+    check_fn=_is_sidecar_available,
+    emoji="⌨️",
+)
+
+registry.register(
+    name="browser_wait_for",
+    toolset="browser_sidecar",
+    schema=WAIT_FOR_SCHEMA,
+    handler=_handle_wait_for,
+    check_fn=_is_sidecar_available,
+    emoji="⏳",
+)
+
+registry.register(
+    name="browser_assert_visible",
+    toolset="browser_sidecar",
+    schema=ASSERT_VISIBLE_SCHEMA,
+    handler=_handle_assert_visible,
+    check_fn=_is_sidecar_available,
+    emoji="👁️",
+)
+
+registry.register(
+    name="browser_get_text",
+    toolset="browser_sidecar",
+    schema=GET_TEXT_SCHEMA,
+    handler=_handle_get_text,
+    check_fn=_is_sidecar_available,
+    emoji="📄",
+)
+
+registry.register(
+    name="browser_screenshot",
+    toolset="browser_sidecar",
+    schema=SCREENSHOT_SCHEMA,
+    handler=_handle_screenshot,
+    check_fn=_is_sidecar_available,
+    emoji="📸",
+)
+
+registry.register(
+    name="browser_run_named_flow",
+    toolset="browser_sidecar",
+    schema=RUN_NAMED_FLOW_SCHEMA,
+    handler=_handle_run_named_flow,
+    check_fn=_is_sidecar_available,
+    emoji="🎬",
+)
