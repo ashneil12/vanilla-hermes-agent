@@ -15,6 +15,7 @@ from tools.skills_tool import (
     _get_category_from_path,
     _find_all_skills,
     skill_matches_platform,
+    skills_categories,
     skills_list,
     skill_view,
     MAX_DESCRIPTION_LENGTH,
@@ -280,6 +281,36 @@ class TestFindAllSkills:
 
         assert [s["name"] for s in skills] == ["knowledge-brain"]
         assert skills[0]["category"] == "linked"
+
+
+# ---------------------------------------------------------------------------
+# skills_categories
+# ---------------------------------------------------------------------------
+
+
+class TestSkillsCategories:
+    def test_lists_categories_with_counts_and_descriptions(self, tmp_path):
+        with patch("tools.skills_tool.SKILLS_DIR", tmp_path):
+            qa_dir = _make_skill(tmp_path, "dogfood", category="qa").parent
+            (qa_dir / "DESCRIPTION.md").write_text(
+                "---\n"
+                "description: Quality assurance workflows.\n"
+                "---\n"
+            )
+            _make_skill(tmp_path, "lint", category="qa")
+            _make_skill(tmp_path, "deploy", category="devops")
+            raw = skills_categories()
+
+        result = json.loads(raw)
+        assert result["success"] is True
+        assert result["categories"] == [
+            {"name": "devops", "skill_count": 1},
+            {
+                "name": "qa",
+                "skill_count": 2,
+                "description": "Quality assurance workflows.",
+            },
+        ]
 
 
 # ---------------------------------------------------------------------------
