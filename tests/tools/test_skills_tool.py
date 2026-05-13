@@ -890,6 +890,33 @@ class TestFindAllSkillsSecureSetup:
 
 
 class TestSkillViewPrerequisites:
+    def test_skill_view_resolves_frontmatter_name_when_directory_differs(self, tmp_path):
+        skill_dir = tmp_path / "bankr" / "bankr-twitter-agent"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            """\
+---
+name: twitter-agent
+description: Bankr Twitter agent.
+---
+
+# Twitter Agent
+
+Use Bankr Twitter tools.
+""",
+            encoding="utf-8",
+        )
+
+        with patch("tools.skills_tool.SKILLS_DIR", tmp_path):
+            listed = json.loads(skills_list())
+            raw = skill_view("twitter-agent")
+
+        result = json.loads(raw)
+        assert listed["skills"][0]["name"] == "twitter-agent"
+        assert result["success"] is True
+        assert result["name"] == "twitter-agent"
+        assert "Use Bankr Twitter tools." in result["content"]
+
     def test_legacy_prerequisites_expose_required_env_setup_metadata(
         self, tmp_path, monkeypatch
     ):

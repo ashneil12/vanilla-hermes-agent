@@ -1091,13 +1091,32 @@ def skill_view(
                     skill_md = categorized_path.with_suffix(".md")
                     break
 
+        from agent.skill_utils import iter_skill_index_files
+
         # Search by directory name across all dirs
         if not skill_md:
             for search_dir in all_dirs:
-                from agent.skill_utils import iter_skill_index_files
-
                 for found_skill_md in iter_skill_index_files(search_dir, "SKILL.md"):
                     if found_skill_md.parent.name == name:
+                        skill_dir = found_skill_md.parent
+                        skill_md = found_skill_md
+                        break
+                if skill_md:
+                    break
+
+        # Search by frontmatter name across all dirs.  Hub-installed skills may
+        # live in a directory whose basename differs from their declared skill
+        # name (e.g. bankr-twitter-agent with `name: twitter-agent`).
+        if not skill_md:
+            for search_dir in all_dirs:
+                for found_skill_md in iter_skill_index_files(search_dir, "SKILL.md"):
+                    try:
+                        frontmatter, _ = _parse_frontmatter(
+                            found_skill_md.read_text(encoding="utf-8")[:4000]
+                        )
+                    except Exception:
+                        continue
+                    if frontmatter.get("name") == name:
                         skill_dir = found_skill_md.parent
                         skill_md = found_skill_md
                         break
