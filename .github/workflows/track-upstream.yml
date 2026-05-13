@@ -35,7 +35,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: true
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.UPSTREAM_SYNC_TOKEN || github.token }}
 
       - name: Configure git identity
         run: |
@@ -93,7 +93,7 @@ jobs:
       - name: Push conflict-resolution branch (conflicted rebase)
         if: steps.rebase.outputs.status == 'conflict'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN || github.token }}
           BEHIND: ${{ steps.state.outputs.behind }}
         run: |
           BRANCH="upstream-sync-$(date +%Y%m%d-%H%M%S)"
@@ -107,6 +107,7 @@ jobs:
             if ! git cherry-pick --no-commit "$sha"; then
               FAILED="${FAILED}- ${sha} ($(git log -1 --format=%s "$sha"))%0A"
               git cherry-pick --abort || true
+              git reset --hard HEAD
             else
               git commit --allow-empty -m "$(git log -1 --format='%s%n%n%b' "$sha")"
             fi
@@ -153,10 +154,10 @@ jobs:
           ${FAILED:-(none)}
 
           ---
-          *Auto-PR creation failed* — \`GITHUB_TOKEN\` lacks PR-create permission
-          in this fork. Fix once: Settings → Actions → General → "Allow GitHub
-          Actions to create and approve pull requests" → enable. Then this
-          message will be replaced with a real PR link on the next conflict.
+          *Auto-PR creation failed* — configure repo secret \`UPSTREAM_SYNC_TOKEN\`
+          with contents/write, pull-requests/write, and workflows/write scopes,
+          or enable "Allow GitHub Actions to create and approve pull requests".
+          Then this message will be replaced with a real PR link on the next conflict.
 
           Error from \`gh pr create\`:
           \`\`\`
