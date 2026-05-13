@@ -1080,15 +1080,14 @@ def _pool_may_recover_from_rate_limit(
 
 def _qwen_portal_headers() -> dict:
     """Return default HTTP headers required by Qwen Portal API."""
-    import platform as _plat
-
-    _ua = f"QwenCode/{_QWEN_CODE_VERSION} ({_plat.system().lower()}; {_plat.machine()})"
+    _ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     return {
         "User-Agent": _ua,
         "X-DashScope-CacheControl": "enable",
         "X-DashScope-UserAgent": _ua,
         "X-DashScope-AuthType": "qwen-oauth",
     }
+
 
 
 class AIAgent:
