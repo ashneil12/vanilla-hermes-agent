@@ -98,7 +98,7 @@ COPY --chown=hermes:hermes . .
 # hermes_cli/web_dist, and HERMES_WEB_DIST points there below.
 RUN cd web && npm run build && \
     cd ../ui-tui && npm run build && \
-    rm -rf /opt/hermes/web
+    rm -rf /opt/hermes/web /opt/hermes/ui-tui/node_modules
 
 # ---------- Link hermes-agent itself (editable) ----------
 # Deps are already installed in the cached layer above; `--no-deps` makes
@@ -111,14 +111,15 @@ FROM runtime_base
 WORKDIR /opt/hermes
 
 # Copy only the finished runtime tree from the build stage. This drops
-# root-owned build caches such as /root/.cache/camoufox and keeps .venv,
-# node_modules, and ui-tui writable by the hermes user for lazy installs and
-# TUI runtime checks without adding a duplicate chown layer.
+# root-owned build caches such as /root/.cache/camoufox and keeps .venv and
+# root node_modules writable by the hermes user for lazy installs/runtime
+# checks without adding a duplicate chown layer.
 COPY --from=build --chown=hermes:hermes /opt/hermes /opt/hermes
 
 # Start as root so the entrypoint can usermod/groupmod + gosu.
 # If HERMES_UID is unset, the entrypoint drops to the default hermes user (10000).
 ENV HERMES_WEB_DIST=/opt/hermes/hermes_cli/web_dist
+ENV HERMES_TUI_DIR=/opt/hermes/ui-tui
 ENV HERMES_HOME=/opt/data
 ENV PATH="/opt/data/.local/bin:${PATH}"
 VOLUME [ "/opt/data" ]
