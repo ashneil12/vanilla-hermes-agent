@@ -2,6 +2,11 @@ name: Docker Build and Publish
 
 on:
   workflow_dispatch:
+    inputs:
+      publish_tag:
+        description: Optional non-floating GHCR tag to publish after smoke tests, for canaries such as slim
+        required: false
+        type: string
   push:
     branches: [main]
     paths:
@@ -55,6 +60,8 @@ jobs:
           load: true
           platforms: linux/amd64
           tags: ghcr.io/ashneil12/vanilla-hermes-agent:test
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -76,15 +83,46 @@ jobs:
             --entrypoint /opt/hermes/docker/entrypoint.sh \
             ghcr.io/ashneil12/vanilla-hermes-agent:test dashboard --help
 
+      - name: Validate manual publish tag
+        id: manual_tag
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_tag != ''
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.publish_tag }}"
+
+          if ! [[ "${tag}" =~ ^[a-z0-9][a-z0-9._-]{0,127}$ ]]; then
+            echo "Invalid publish_tag: ${tag}" >&2
+            echo "Use a lowercase Docker tag made of letters, digits, dots, underscores, and hyphens." >&2
+            exit 1
+          fi
+
+          case "${tag}" in
+            latest|stable)
+              echo "Refusing to publish floating production tag '${tag}' from workflow_dispatch." >&2
+              exit 1
+              ;;
+          esac
+
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
       - name: Log in to GitHub Container Registry
         if: >-
           (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-          github.event_name == 'release'
+          github.event_name == 'release' ||
+          steps.manual_tag.outputs.tag != ''
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push manual image tag
+        if: steps.manual_tag.outputs.tag != ''
+        run: |
+          set -euo pipefail
+          image=ghcr.io/ashneil12/vanilla-hermes-agent
+          docker tag "${image}:test" "${image}:${{ steps.manual_tag.outputs.tag }}"
+          docker push "${image}:${{ steps.manual_tag.outputs.tag }}"
 
       # Push an immutable per-commit SHA tag first. Floating tags move in the
       # follow-up job after an ancestor check, which prevents stale runs from
