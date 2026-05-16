@@ -12,19 +12,22 @@ Covers:
 import json
 import os
 import time
-from types import SimpleNamespace
+from contextlib import contextmanager
+from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock, patch, PropertyMock
 
 import pytest
 
 
-def _fake_botocore_session(mock_session):
-    fake_session_module = SimpleNamespace(get_session=MagicMock(return_value=mock_session))
-    fake_botocore = SimpleNamespace(session=fake_session_module)
-    return patch.dict(
-        "sys.modules",
-        {"botocore": fake_botocore, "botocore.session": fake_session_module},
-    )
+@contextmanager
+def _mock_botocore_session(*, return_value=None, side_effect=None):
+    """Patch botocore.session even when botocore is not installed."""
+    botocore_mod = ModuleType("botocore")
+    session_mod = ModuleType("botocore.session")
+    session_mod.get_session = MagicMock(return_value=return_value, side_effect=side_effect)
+    botocore_mod.session = session_mod
+    with patch.dict("sys.modules", {"botocore": botocore_mod, "botocore.session": session_mod}):
+        yield session_mod.get_session
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +132,7 @@ class TestResolveBedrocRegion:
         from unittest.mock import patch, MagicMock
         mock_session = MagicMock()
         mock_session.get_config_variable.return_value = None
-        with _fake_botocore_session(mock_session):
+        with _mock_botocore_session(return_value=mock_session):
             assert resolve_bedrock_region({}) == "us-east-1"
 
     def test_falls_back_to_botocore_profile_region(self):
@@ -137,17 +140,13 @@ class TestResolveBedrocRegion:
         from unittest.mock import patch, MagicMock
         mock_session = MagicMock()
         mock_session.get_config_variable.return_value = "eu-central-1"
-        with _fake_botocore_session(mock_session):
+        with _mock_botocore_session(return_value=mock_session):
             assert resolve_bedrock_region({}) == "eu-central-1"
 
     def test_botocore_failure_falls_back_to_us_east_1(self):
         from agent.bedrock_adapter import resolve_bedrock_region
-        fake_session_module = SimpleNamespace(get_session=MagicMock(side_effect=Exception("no botocore")))
-        fake_botocore = SimpleNamespace(session=fake_session_module)
-        with patch.dict(
-            "sys.modules",
-            {"botocore": fake_botocore, "botocore.session": fake_session_module},
-        ):
+        from unittest.mock import patch
+        with _mock_botocore_session(side_effect=Exception("no botocore")):
             assert resolve_bedrock_region({}) == "us-east-1"
 
 
