@@ -432,6 +432,43 @@ PROVIDER_REGISTRY: Dict[str, ProviderConfig] = {
         api_key_env_vars=("AZURE_FOUNDRY_API_KEY",),
         base_url_env_var="AZURE_FOUNDRY_BASE_URL",
     ),
+    # HermesOS Cloud first-class OpenAI-compatible aggregators. Adding
+    # these so resolve_provider_client("venice"|"crof"|"bankr"|"cometapi")
+    # finds a base_url + key, instead of failing with "Provider X is set
+    # in config.yaml but no API key was found." when the WebUI's model
+    # picker sets one of these as the active provider.
+    "venice": ProviderConfig(
+        id="venice",
+        name="Venice",
+        auth_type="api_key",
+        inference_base_url="https://api.venice.ai/api/v1",
+        api_key_env_vars=("VENICE_API_KEY",),
+        base_url_env_var="VENICE_BASE_URL",
+    ),
+    "crof": ProviderConfig(
+        id="crof",
+        name="CrofAI",
+        auth_type="api_key",
+        inference_base_url="https://crof.ai/v1",
+        api_key_env_vars=("CROF_API_KEY",),
+        base_url_env_var="CROF_BASE_URL",
+    ),
+    "bankr": ProviderConfig(
+        id="bankr",
+        name="Bankr",
+        auth_type="api_key",
+        inference_base_url="https://gateway.bankr.bot/v1",
+        api_key_env_vars=("BANKR_API_KEY",),
+        base_url_env_var="BANKR_BASE_URL",
+    ),
+    "cometapi": ProviderConfig(
+        id="cometapi",
+        name="CometAPI",
+        auth_type="api_key",
+        inference_base_url="https://api.cometapi.com/v1",
+        api_key_env_vars=("COMETAPI_API_KEY", "COMET_API_KEY"),
+        base_url_env_var="COMETAPI_BASE_URL",
+    ),
 }
 
 # Auto-extend PROVIDER_REGISTRY with any api-key provider registered in
