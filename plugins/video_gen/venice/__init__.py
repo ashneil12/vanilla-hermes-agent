@@ -1,6 +1,6 @@
 """Venice video generation backend (text-to-video + image-to-video).
 
-Surface: ``POST /videos/queue`` (submit) plus ``GET /videos/{id}`` (poll
+Surface: ``POST /video/queue`` (submit) plus ``GET /video/{id}`` (poll
 for completion). Venice exposes a curated catalog spanning Veo, Kling,
 Seedance, Wan, and others through one endpoint — the plugin abstracts
 that as ``model=`` selection with a default of ``veo-3.1`` for
@@ -178,7 +178,7 @@ async def _submit_job(
     base_url: str,
 ) -> str:
     response = await client.post(
-        f"{base_url}/videos/queue",
+        f"{base_url}/video/queue",
         headers=_venice_headers(api_key),
         json=payload,
         timeout=60,
@@ -204,7 +204,7 @@ async def _poll_job(
     last_status = "queued"
     while elapsed < timeout_seconds:
         response = await client.get(
-            f"{base_url}/videos/{queue_id}",
+            f"{base_url}/video/{queue_id}",
             headers=_venice_headers(api_key),
             timeout=30,
         )

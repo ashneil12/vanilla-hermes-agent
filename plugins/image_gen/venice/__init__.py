@@ -1,6 +1,6 @@
 """Venice image generation backend.
 
-Exposes Venice's ``/images/generate`` endpoint as an
+Exposes Venice's ``/image/generate`` endpoint as an
 :class:`ImageGenProvider` implementation.
 
 Venice's catalog mixes three sizing families — pixel-based
@@ -237,7 +237,7 @@ def _build_payload(
 
 
 class VeniceImageGenProvider(ImageGenProvider):
-    """Venice ``/images/generate`` backend."""
+    """Venice ``/image/generate`` backend."""
 
     @property
     def name(self) -> str:
@@ -314,7 +314,7 @@ class VeniceImageGenProvider(ImageGenProvider):
 
         try:
             response = requests.post(
-                f"{base_url}/images/generate",
+                f"{base_url}/image/generate",
                 headers=headers,
                 json=payload,
                 timeout=DEFAULT_TIMEOUT_SECONDS,

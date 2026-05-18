@@ -3,10 +3,10 @@
 
 Four agent-facing tools wrap Venice's image-editing endpoints:
 
-    image_upscale            POST /images/upscale
-    image_edit               POST /images/edit             (inpaint / restyle)
-    image_compose            POST /images/multi-edit       (1-3 layered images)
-    image_remove_background  POST /images/background-remove
+    image_upscale            POST /image/upscale
+    image_edit               POST /image/edit             (inpaint / restyle)
+    image_compose            POST /image/multi-edit       (1-3 layered images)
+    image_remove_background  POST /image/background-remove
 
 Authentication: ``VENICE_API_KEY`` (same key as Venice chat / image gen /
 video gen / TTS / STT). Base URL is overridable via ``VENICE_BASE_URL``
@@ -230,7 +230,7 @@ def image_upscale_tool(
     enhance_creativity: Optional[float] = None,
     replication: Optional[float] = None,
 ) -> str:
-    """Upscale or enhance an image via Venice ``/images/upscale``."""
+    """Upscale or enhance an image via Venice ``/image/upscale``."""
     api_key, base_url = _resolve_credentials()
     if not api_key:
         return _error(
@@ -263,7 +263,7 @@ def image_upscale_tool(
 
     try:
         response = _post_multipart(
-            "/images/upscale",
+            "/image/upscale",
             image_bytes=image_bytes, image_name=image_name,
             data_fields=data, api_key=api_key, base_url=base_url,
         )
@@ -355,7 +355,7 @@ def image_edit_tool(
     resolution: Optional[str] = None,
     output_format: Optional[str] = None,
 ) -> str:
-    """Edit / restyle an image with a text prompt via Venice ``/images/edit``."""
+    """Edit / restyle an image with a text prompt via Venice ``/image/edit``."""
     api_key, base_url = _resolve_credentials()
     if not api_key:
         return _error(
@@ -385,7 +385,7 @@ def image_edit_tool(
 
     try:
         response = _post_multipart(
-            "/images/edit",
+            "/image/edit",
             image_bytes=image_bytes, image_name=image_name,
             data_fields=data, api_key=api_key, base_url=base_url,
         )
@@ -477,7 +477,7 @@ def image_compose_tool(
     resolution: Optional[str] = None,
     output_format: Optional[str] = None,
 ) -> str:
-    """Compose 1-3 images into a single output via Venice ``/images/multi-edit``.
+    """Compose 1-3 images into a single output via Venice ``/image/multi-edit``.
 
     The first image is the base; subsequent ones are edit layers. Venice
     accepts base64 strings or HTTP URLs (NOT file uploads here), so we
@@ -529,7 +529,7 @@ def image_compose_tool(
         import requests
 
         response = requests.post(
-            f"{base_url}/images/multi-edit",
+            f"{base_url}/image/multi-edit",
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
@@ -622,7 +622,7 @@ registry.register(
 
 
 def image_remove_background_tool(image: str) -> str:
-    """Remove the background from an image via Venice ``/images/background-remove``.
+    """Remove the background from an image via Venice ``/image/background-remove``.
 
     Returns a PNG with a transparent background.
     """
@@ -644,7 +644,7 @@ def image_remove_background_tool(image: str) -> str:
             import requests
 
             response = requests.post(
-                f"{base_url}/images/background-remove",
+                f"{base_url}/image/background-remove",
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
@@ -662,7 +662,7 @@ def image_remove_background_tool(image: str) -> str:
             return _error(f"Could not read image: {exc}", tool="image_remove_background", error_type="bad_input")
         try:
             response = _post_multipart(
-                "/images/background-remove",
+                "/image/background-remove",
                 image_bytes=image_bytes, image_name=image_name,
                 data_fields={}, api_key=api_key, base_url=base_url,
             )
