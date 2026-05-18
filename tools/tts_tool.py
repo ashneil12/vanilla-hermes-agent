@@ -168,6 +168,9 @@ DEFAULT_XAI_LANGUAGE = "en"
 DEFAULT_XAI_SAMPLE_RATE = 24000
 DEFAULT_XAI_BIT_RATE = 128000
 DEFAULT_XAI_BASE_URL = "https://api.x.ai/v1"
+DEFAULT_VENICE_TTS_MODEL = "tts-kokoro"
+DEFAULT_VENICE_TTS_VOICE = "af_sky"
+DEFAULT_VENICE_TTS_BASE_URL = "https://api.venice.ai/api/v1"
 DEFAULT_GEMINI_TTS_MODEL = "gemini-2.5-flash-preview-tts"
 DEFAULT_GEMINI_TTS_VOICE = "Kore"
 DEFAULT_GEMINI_TTS_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
@@ -300,8 +303,19 @@ def _load_tts_config() -> Dict[str, Any]:
 
 
 def _get_provider(tts_config: Dict[str, Any]) -> str:
-    """Get the configured TTS provider name."""
-    return (tts_config.get("provider") or DEFAULT_PROVIDER).lower().strip()
+    """Get the configured TTS provider name.
+
+    Explicit ``tts.provider`` in config.yaml always wins. When unset, we
+    prefer ``venice`` if ``VENICE_API_KEY`` is in env (HermesOS auto-pair
+    so multi-modal lives on the chat key), otherwise fall back to
+    :data:`DEFAULT_PROVIDER` (free Edge TTS).
+    """
+    explicit = tts_config.get("provider")
+    if isinstance(explicit, str) and explicit.strip():
+        return explicit.lower().strip()
+    if os.environ.get("VENICE_API_KEY", "").strip():
+        return "venice"
+    return DEFAULT_PROVIDER
 
 
 # ===========================================================================
@@ -341,6 +355,7 @@ BUILTIN_TTS_PROVIDERS = frozenset({
     "openai",
     "minimax",
     "xai",
+    "venice",
     "mistral",
     "gemini",
     "neutts",
@@ -949,6 +964,76 @@ def _generate_xai_tts(text: str, output_path: str, tts_config: Dict[str, Any]) -
         },
         json=payload,
         timeout=60,
+    )
+    response.raise_for_status()
+
+    with open(output_path, "wb") as f:
+        f.write(response.content)
+
+    return output_path
+
+
+# ===========================================================================
+# Provider: Venice TTS
+# ===========================================================================
+def _generate_venice_tts(text: str, output_path: str, tts_config: Dict[str, Any]) -> str:
+    """Generate audio using Venice's OpenAI-compatible /audio/speech endpoint.
+
+    Venice unifies 50+ voices spanning multiple TTS model families
+    (Kokoro, Qwen 3, xAI, ElevenLabs, Inworld, Orpheus, etc.) behind a
+    single OpenAI-shaped endpoint. One ``VENICE_API_KEY`` covers chat +
+    image + video + speech.
+    """
+    import requests
+
+    api_key = os.environ.get("VENICE_API_KEY", "").strip()
+    if not api_key:
+        raise ValueError(
+            "No Venice credentials found. Set VENICE_API_KEY (same key as Venice chat)."
+        )
+
+    venice_config = tts_config.get("venice", {}) if isinstance(tts_config, dict) else {}
+    model = str(venice_config.get("model") or DEFAULT_VENICE_TTS_MODEL).strip() or DEFAULT_VENICE_TTS_MODEL
+    voice = str(venice_config.get("voice") or DEFAULT_VENICE_TTS_VOICE).strip() or DEFAULT_VENICE_TTS_VOICE
+    speed_raw = venice_config.get("speed")
+    try:
+        speed = float(speed_raw) if speed_raw is not None else 1.0
+    except (TypeError, ValueError):
+        speed = 1.0
+    speed = max(0.25, min(4.0, speed))
+
+    base_url = str(
+        venice_config.get("base_url")
+        or os.environ.get("VENICE_BASE_URL")
+        or DEFAULT_VENICE_TTS_BASE_URL
+    ).strip().rstrip("/")
+
+    # Map output extension → Venice response_format. Venice supports
+    # mp3 / opus / aac / flac / wav / pcm.
+    ext = output_path.rsplit(".", 1)[-1].lower() if "." in output_path else "mp3"
+    response_format = ext if ext in {"mp3", "opus", "aac", "flac", "wav", "pcm"} else "mp3"
+
+    payload: Dict[str, Any] = {
+        "model": model,
+        "input": text,
+        "voice": voice,
+        "response_format": response_format,
+        "speed": speed,
+    }
+
+    language = venice_config.get("language")
+    if isinstance(language, str) and language.strip():
+        payload["language"] = language.strip()
+
+    response = requests.post(
+        f"{base_url}/audio/speech",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": "hermes-agent/tts-venice",
+        },
+        json=payload,
+        timeout=120,
     )
     response.raise_for_status()
 
@@ -1736,6 +1821,10 @@ def text_to_speech_tool(
         elif provider == "xai":
             logger.info("Generating speech with xAI TTS...")
             _generate_xai_tts(text, file_str, tts_config)
+
+        elif provider == "venice":
+            logger.info("Generating speech with Venice TTS...")
+            _generate_venice_tts(text, file_str, tts_config)
 
         elif provider == "mistral":
             # `mistralai` PyPI package was quarantined on 2026-05-12 after a

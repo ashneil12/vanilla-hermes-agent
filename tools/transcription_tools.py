@@ -275,11 +275,21 @@ def _get_provider(stt_config: dict) -> str:
             )
             return "none"
 
+        if provider == "venice":
+            if os.environ.get("VENICE_API_KEY", "").strip():
+                return "venice"
+            logger.warning(
+                "STT provider 'venice' configured but VENICE_API_KEY is not set"
+            )
+            return "none"
+
         return provider  # Unknown — let it fail downstream
 
-    # --- Auto-detect (no explicit provider): local > groq > openai > xai ---
+    # --- Auto-detect (no explicit provider): local > groq > openai > venice > xai ---
     # mistral is intentionally skipped while `mistralai` is quarantined on
-    # PyPI (malicious 2.4.6 release on 2026-05-12).
+    # PyPI (malicious 2.4.6 release on 2026-05-12). Venice is preferred over
+    # xAI when both keys are present — it pairs with the rest of the Venice
+    # multi-modal stack (chat / image / video / TTS) under one key.
 
     if _HAS_FASTER_WHISPER:
         return "local"
@@ -291,6 +301,9 @@ def _get_provider(stt_config: dict) -> str:
     if _HAS_OPENAI and _has_openai_audio_backend():
         logger.info("No local STT available, using OpenAI Whisper API")
         return "openai"
+    if os.environ.get("VENICE_API_KEY", "").strip():
+        logger.info("No local STT available, using Venice STT API")
+        return "venice"
     try:
         from tools.xai_http import resolve_xai_http_credentials
 
@@ -806,6 +819,104 @@ def _transcribe_xai(file_path: str, model_name: str) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Provider: Venice (/audio/transcriptions)
+# ---------------------------------------------------------------------------
+
+
+DEFAULT_VENICE_STT_BASE_URL = "https://api.venice.ai/api/v1"
+DEFAULT_VENICE_STT_MODEL = "whisper-1"
+
+
+def _transcribe_venice(file_path: str, model_name: str) -> Dict[str, Any]:
+    """Transcribe using Venice's OpenAI-compatible /audio/transcriptions endpoint.
+
+    Same ``VENICE_API_KEY`` as chat + image + video + speech. Supports
+    word-level timestamps via ``response_format=verbose_json``.
+    """
+    api_key = os.environ.get("VENICE_API_KEY", "").strip()
+    if not api_key:
+        return {
+            "success": False,
+            "transcript": "",
+            "error": "No Venice credentials found. Set VENICE_API_KEY (same key as Venice chat).",
+        }
+
+    stt_config = _load_stt_config()
+    venice_config = stt_config.get("venice", {}) if isinstance(stt_config, dict) else {}
+    base_url = str(
+        venice_config.get("base_url")
+        or os.environ.get("VENICE_BASE_URL")
+        or DEFAULT_VENICE_STT_BASE_URL
+    ).strip().rstrip("/")
+    model = (model_name or venice_config.get("model") or DEFAULT_VENICE_STT_MODEL).strip()
+    language = venice_config.get("language")
+    response_format = str(venice_config.get("response_format") or "json").strip() or "json"
+
+    try:
+        import requests
+
+        data: Dict[str, str] = {
+            "model": model,
+            "response_format": response_format,
+        }
+        if isinstance(language, str) and language.strip():
+            data["language"] = language.strip()
+
+        with open(file_path, "rb") as audio_file:
+            response = requests.post(
+                f"{base_url}/audio/transcriptions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "User-Agent": "hermes-agent/stt-venice",
+                },
+                files={"file": (Path(file_path).name, audio_file)},
+                data=data,
+                timeout=180,
+            )
+
+        if response.status_code != 200:
+            detail = ""
+            try:
+                err_body = response.json()
+                detail = (err_body.get("error") or {}).get("message", "") or response.text[:300]
+            except Exception:
+                detail = response.text[:300]
+            return {
+                "success": False,
+                "transcript": "",
+                "error": f"Venice STT error (HTTP {response.status_code}): {detail}",
+            }
+
+        if response_format in {"text", "srt", "vtt"}:
+            transcript_text = response.text.strip()
+        else:
+            result = response.json()
+            transcript_text = (result.get("text") or "").strip()
+
+        if not transcript_text:
+            return {
+                "success": False,
+                "transcript": "",
+                "error": "Venice STT returned empty transcript",
+            }
+
+        logger.info(
+            "Transcribed %s via Venice STT (model=%s, %d chars)",
+            Path(file_path).name,
+            model,
+            len(transcript_text),
+        )
+
+        return {"success": True, "transcript": transcript_text, "provider": "venice"}
+
+    except PermissionError:
+        return {"success": False, "transcript": "", "error": f"Permission denied: {file_path}"}
+    except Exception as e:
+        logger.error("Venice STT transcription failed: %s", e, exc_info=True)
+        return {"success": False, "transcript": "", "error": f"Venice STT transcription failed: {e}"}
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -877,6 +988,11 @@ def transcribe_audio(file_path: str, model: Optional[str] = None) -> Dict[str, A
         # xAI Grok STT doesn't use a model parameter — pass through for logging
         model_name = model or "grok-stt"
         return _transcribe_xai(file_path, model_name)
+
+    if provider == "venice":
+        venice_cfg = stt_config.get("venice", {})
+        model_name = model or venice_cfg.get("model", DEFAULT_VENICE_STT_MODEL)
+        return _transcribe_venice(file_path, model_name)
 
     # No provider available
     return {
