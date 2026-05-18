@@ -35,8 +35,22 @@ _HERMES_CORE_TOOLS = [
     "terminal", "process",
     # File manipulation
     "read_file", "write_file", "patch", "search_files",
-    # Vision + image generation
+    # Vision + image generation + multimodal editing
+    # image_edit / image_compose / image_upscale / image_remove_background
+    # all register under the ``image_gen`` toolset (see tools/image_edit_tool.py).
+    # They MUST be listed here so the platform-tool resolver's subset check
+    # (hermes_cli/tools_config.py::_get_platform_tools) treats ``image_gen``
+    # as a subset of ``hermes-cli`` once the runtime registry has loaded the
+    # extra tools — otherwise the toolset silently disappears from the LLM's
+    # tool list (image_generate becomes invisible) and the agent falls back
+    # to shell/curl. Each tool's own ``check_fn`` still gates schema
+    # exposure when its provider key is missing.
     "vision_analyze", "image_generate",
+    "image_edit", "image_compose", "image_upscale", "image_remove_background",
+    # Multimodal config tool (model picker per modality). Registered under
+    # ``toolset="config"`` — needs to be in core so the resolver's recovery
+    # loop treats the toolset as a subset of the platform composite.
+    "multimodal_set_model", "multimodal_get_settings",
     # Skills
     "skills_list", "skill_view", "skill_manage",
     # Browser automation
@@ -46,8 +60,12 @@ _HERMES_CORE_TOOLS = [
     "browser_vision", "browser_console", "browser_cdp", "browser_dialog",
     # Text-to-speech
     "text_to_speech",
-    # Planning & memory
-    "todo", "memory",
+    # Planning & memory + embeddings
+    # text_embed registers under ``toolset="memory"`` (see tools/embed_tool.py);
+    # same subset-check reasoning as the image_gen tools above — without
+    # listing it here the ``memory`` toolset disappears from the LLM's tool
+    # list at runtime once embed_tool is imported.
+    "todo", "memory", "text_embed",
     # Session history search
     "session_search",
     # Clarifying questions
