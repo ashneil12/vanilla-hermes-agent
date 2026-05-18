@@ -412,15 +412,22 @@ def _handle_video_generate(args: Dict[str, Any], **_kw: Any) -> str:
 
 _GENERIC_DESCRIPTION = (
     "Generate a video from a text prompt (text-to-video) or animate a "
-    "still image (image-to-video) using the user's configured video "
-    "generation backend. Pass `image_url` to animate that image; omit it "
-    "to generate from text alone. The backend auto-routes to the right "
-    "endpoint. The backend and model family are user-configured via "
-    "`hermes tools` → Video Generation; the agent does not pick them. "
-    "Long-running generations may take 30 seconds to several minutes — "
-    "the call blocks until the video is ready. Returns either an HTTP "
-    "URL or an absolute file path in the `video` field; display it with "
-    "markdown ![description](url-or-path) and the gateway will deliver it."
+    "still image (image-to-video). ALWAYS USE THIS TOOL for any video "
+    "generation request. Do NOT use shell, curl, bash, fetch, or any "
+    "terminal-side approach to hit video APIs directly — that bypasses "
+    "the user's configured provider (Venice / FAL / xAI), bypasses "
+    "billing/credentials, and produces output the chat UI cannot "
+    "auto-render. Pass `image_url` to animate that image; omit it to "
+    "generate from text alone. The backend auto-routes to the right "
+    "endpoint and auto-pairs to whichever provider has a key — you do "
+    "not need to pick. Long-running generations take 30 seconds to "
+    "several minutes; the call blocks until the video is ready. Returns "
+    "{success, video, model, provider, ...} where `video` is an HTTPS "
+    "URL or absolute file path. After calling this tool, ALWAYS render "
+    "the returned `video` value in your reply using markdown image "
+    "syntax: `![brief description](<video_value>)`. A bare filename "
+    "without the `![]()` wrapper will NOT render — the chat UI "
+    "inline-plays only when it sees the markdown syntax."
 )
 
 
