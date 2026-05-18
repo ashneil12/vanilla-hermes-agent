@@ -929,11 +929,20 @@ from tools.registry import registry, tool_error
 IMAGE_GENERATE_SCHEMA = {
     "name": "image_generate",
     "description": (
-        "Generate high-quality images from text prompts. The underlying "
-        "backend (FAL, OpenAI, etc.) and model are user-configured and not "
-        "selectable by the agent. Returns either a URL or an absolute file "
-        "path in the `image` field; display it with markdown "
-        "![description](url-or-path) and the gateway will deliver it."
+        "Generate images from text prompts. ALWAYS USE THIS TOOL for any "
+        "image generation request. Do NOT use shell, curl, bash, fetch, "
+        "or any terminal-side approach to hit image APIs directly — that "
+        "bypasses the user's configured provider (Venice / FAL / xAI / "
+        "OpenAI etc.), bypasses billing/credentials, and produces output "
+        "that the chat UI cannot auto-render. The backend is auto-paired "
+        "to whichever provider the user has a key for (Venice when "
+        "VENICE_API_KEY is set, FAL otherwise) — you do not need to pick. "
+        "Returns {success, image, model, provider, ...} where `image` is "
+        "an absolute file path or HTTPS URL. After calling this tool, "
+        "ALWAYS render the returned `image` value in your reply using "
+        "markdown image syntax: `![brief description](<image_value>)`. "
+        "A bare filename without the `![]()` wrapper will NOT render — "
+        "the chat UI inline-renders only when it sees the markdown syntax."
     ),
     "parameters": {
         "type": "object",
