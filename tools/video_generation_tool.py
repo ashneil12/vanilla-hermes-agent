@@ -425,9 +425,12 @@ _GENERIC_DESCRIPTION = (
     "{success, video, model, provider, ...} where `video` is an HTTPS "
     "URL or absolute file path. After calling this tool, ALWAYS render "
     "the returned `video` value in your reply using markdown image "
-    "syntax: `![brief description](<video_value>)`. A bare filename "
-    "without the `![]()` wrapper will NOT render — the chat UI "
-    "inline-plays only when it sees the markdown syntax."
+    "syntax with a MEDIA: prefix: "
+    "`![brief description](MEDIA:<video_value>)`. Use the `video` "
+    "value VERBATIM (full path, no trimming) — the MEDIA: prefix is "
+    "what tells the chat UI to fetch and inline-play the video. "
+    "Without `MEDIA:` (or without the `![]()` wrapper), the path "
+    "renders as broken markdown text instead of an inline player."
 )
 
 
