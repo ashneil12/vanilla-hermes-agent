@@ -940,9 +940,12 @@ IMAGE_GENERATE_SCHEMA = {
         "Returns {success, image, model, provider, ...} where `image` is "
         "an absolute file path or HTTPS URL. After calling this tool, "
         "ALWAYS render the returned `image` value in your reply using "
-        "markdown image syntax: `![brief description](<image_value>)`. "
-        "A bare filename without the `![]()` wrapper will NOT render — "
-        "the chat UI inline-renders only when it sees the markdown syntax."
+        "markdown image syntax with a MEDIA: prefix: "
+        "`![brief description](MEDIA:<image_value>)`. Use the `image` "
+        "value VERBATIM (full path, no trimming) — the MEDIA: prefix is "
+        "what tells the chat UI to fetch and inline-render the image. "
+        "Without `MEDIA:` (or without the `![]()` wrapper), the path "
+        "renders as broken markdown text instead of an image."
     ),
     "parameters": {
         "type": "object",
