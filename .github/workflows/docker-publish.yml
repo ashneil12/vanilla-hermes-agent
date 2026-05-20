@@ -26,7 +26,7 @@ concurrency:
 
 jobs:
   build-and-push:
-    if: github.repository == 'ashneil12/vanilla-hermes-agent'
+    if: github.repository == 'ashneil12/vanilla-hermes-agent-canary'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -54,7 +54,7 @@ jobs:
           file: Dockerfile
           load: true
           platforms: linux/amd64
-          tags: ghcr.io/ashneil12/vanilla-hermes-agent:test
+          tags: ghcr.io/ashneil12/vanilla-hermes-agent-canary:test
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -65,7 +65,7 @@ jobs:
           docker run --rm \
             -v /tmp/hermes-test:/opt/data \
             --entrypoint /opt/hermes/docker/entrypoint.sh \
-            ghcr.io/ashneil12/vanilla-hermes-agent:test --help
+            ghcr.io/ashneil12/vanilla-hermes-agent-canary:test --help
 
       - name: Test dashboard subcommand
         run: |
@@ -74,7 +74,7 @@ jobs:
           docker run --rm \
             -v /tmp/hermes-test:/opt/data \
             --entrypoint /opt/hermes/docker/entrypoint.sh \
-            ghcr.io/ashneil12/vanilla-hermes-agent:test dashboard --help
+            ghcr.io/ashneil12/vanilla-hermes-agent-canary:test dashboard --help
 
       - name: Log in to GitHub Container Registry
         if: >-
@@ -99,7 +99,7 @@ jobs:
           push: true
           provenance: false
           platforms: linux/amd64
-          tags: ghcr.io/ashneil12/vanilla-hermes-agent:${{ github.sha }}
+          tags: ghcr.io/ashneil12/vanilla-hermes-agent-canary:${{ github.sha }}
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha
@@ -118,12 +118,12 @@ jobs:
           file: Dockerfile
           push: true
           provenance: false
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           tags: |
-            ghcr.io/ashneil12/vanilla-hermes-agent:latest
-            ghcr.io/ashneil12/vanilla-hermes-agent:stable
-            ghcr.io/ashneil12/vanilla-hermes-agent:${{ github.event.release.tag_name }}
-            ghcr.io/ashneil12/vanilla-hermes-agent:${{ github.sha }}
+            ghcr.io/ashneil12/vanilla-hermes-agent-canary:latest
+            ghcr.io/ashneil12/vanilla-hermes-agent-canary:stable
+            ghcr.io/ashneil12/vanilla-hermes-agent-canary:${{ github.event.release.tag_name }}
+            ghcr.io/ashneil12/vanilla-hermes-agent-canary:${{ github.sha }}
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha
@@ -131,7 +131,7 @@ jobs:
 
   move-floating-tags:
     if: |
-      github.repository == 'ashneil12/vanilla-hermes-agent'
+      github.repository == 'ashneil12/vanilla-hermes-agent-canary'
       && github.event_name == 'push'
       && github.ref == 'refs/heads/main'
       && needs.build-and-push.outputs.pushed_sha_tag == 'true'
@@ -164,7 +164,7 @@ jobs:
         id: latest_check
         run: |
           set -euo pipefail
-          image=ghcr.io/ashneil12/vanilla-hermes-agent
+          image=ghcr.io/ashneil12/vanilla-hermes-agent-canary
 
           image_json=$(
             docker buildx imagetools inspect "${image}:latest" \
@@ -222,7 +222,7 @@ jobs:
         if: steps.latest_check.outputs.push_floating == 'true'
         run: |
           set -euo pipefail
-          image=ghcr.io/ashneil12/vanilla-hermes-agent
+          image=ghcr.io/ashneil12/vanilla-hermes-agent-canary
           docker buildx imagetools create \
             --tag "${image}:latest" \
             --tag "${image}:stable" \
