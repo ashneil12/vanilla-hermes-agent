@@ -227,3 +227,5 @@ jobs:
             --tag "${image}:latest" \
             --tag "${image}:stable" \
             "${image}:${GITHUB_SHA}"
+
+# canary: amd64-only image channel for hermesdeploy-canary dog-fooding
