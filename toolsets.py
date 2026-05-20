@@ -67,6 +67,7 @@ _HERMES_CORE_TOOLS = [
     # listing it here the ``memory`` toolset disappears from the LLM's tool
     # list at runtime once embed_tool is imported.
     "todo", "memory", "text_embed",
+    "venice_characters",
     # Session history search
     "session_search",
     # Clarifying questions
