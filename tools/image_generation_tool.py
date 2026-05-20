@@ -1014,8 +1014,25 @@ def _dispatch_to_plugin_provider(prompt: str, aspect_ratio: str):
     that matches a registered plugin provider wins.
     """
     configured = _read_configured_image_provider()
-    if not configured or configured == "fal":
+    if configured == "fal":
         return None
+    if not configured:
+        # No explicit image_gen.provider: auto-pair with the active provider
+        # (e.g. venice when VENICE_API_KEY is set), mirroring video_gen.
+        try:
+            from agent.image_gen_registry import get_active_provider
+            from hermes_cli.plugins import _ensure_plugins_discovered
+            _ensure_plugins_discovered()
+            _ap = get_active_provider()
+            if _ap is None:
+                _ensure_plugins_discovered(force=True)
+                _ap = get_active_provider()
+        except Exception as exc:
+            logger.debug("image_gen auto-pair skipped: %s", exc)
+            _ap = None
+        if _ap is None or getattr(_ap, "name", None) == "fal":
+            return None
+        configured = _ap.name
 
     # Also read configured model so we can pass it to the plugin
     configured_model = _read_configured_image_model()
