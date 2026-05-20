@@ -47,6 +47,7 @@ _HERMES_CORE_TOOLS = [
     # exposure when its provider key is missing.
     "vision_analyze", "image_generate",
     "video_generate",
+    "audio_generate",
     "image_edit", "image_compose", "image_upscale", "image_remove_background",
     # Multimodal config tool (model picker per modality). Registered under
     # ``toolset="config"`` — needs to be in core so the resolver's recovery
