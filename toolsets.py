@@ -49,6 +49,12 @@ _HERMES_CORE_TOOLS = [
     "video_generate",
     "audio_generate",
     "image_edit", "image_compose", "image_upscale", "image_remove_background",
+    # Venice extras (tools/venice_extras_tool.py): image style presets,
+    # document/text parser, voice cloning, YouTube transcription, and music/video
+    # cost quotes. Same subset-check reasoning as the image tools above — must be
+    # listed here so their toolsets stay a subset of the platform composite.
+    "image_styles", "text_parser", "video_transcribe", "voice_clone",
+    "audio_quote", "video_quote",
     # Multimodal config tool (model picker per modality). Registered under
     # ``toolset="config"`` — needs to be in core so the resolver's recovery
     # loop treats the toolset as a subset of the platform composite.
@@ -112,7 +118,7 @@ TOOLSETS = {
     # Basic toolsets - individual tool categories
     "web": {
         "description": "Web research and content extraction tools",
-        "tools": ["web_search", "web_extract"],
+        "tools": ["web_search", "web_extract", "text_parser", "video_transcribe"],
         "includes": []  # No other toolsets included
     },
     
@@ -147,7 +153,7 @@ TOOLSETS = {
     
     "image_gen": {
         "description": "Creative generation tools (images)",
-        "tools": ["image_generate"],
+        "tools": ["image_generate", "image_styles"],
         "includes": []
     },
 
@@ -158,7 +164,7 @@ TOOLSETS = {
             "``audio_generate`` generates music and sound effects (Venice). The "
             "active backend auto-routes. Configure via ``hermes tools`` → Video Generation."
         ),
-        "tools": ["video_generate", "audio_generate"],
+        "tools": ["video_generate", "audio_generate", "audio_quote", "video_quote"],
         "includes": []
     },
 
@@ -247,7 +253,7 @@ TOOLSETS = {
     
     "tts": {
         "description": "Text-to-speech: convert text to audio with Edge TTS (free), ElevenLabs, OpenAI, or xAI",
-        "tools": ["text_to_speech"],
+        "tools": ["text_to_speech", "voice_clone"],
         "includes": []
     },
     
