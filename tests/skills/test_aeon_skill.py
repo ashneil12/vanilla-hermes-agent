@@ -19,7 +19,7 @@ import pytest
 import yaml
 
 SKILL_DIR = Path(__file__).resolve().parents[2] / "skills" / "autonomous-ai-agents" / "aeon"
-SCRIPTS = ["_lib.sh", "aeon-list-skills.sh", "aeon-invoke.sh", "aeon-enable-skill.sh", "aeon-check-outputs.sh"]
+SCRIPTS = ["_lib.sh", "aeon-setup.sh", "aeon-list-skills.sh", "aeon-invoke.sh", "aeon-enable-skill.sh", "aeon-check-outputs.sh"]
 
 
 @pytest.fixture(scope="module")
@@ -54,7 +54,9 @@ def test_config_block_is_list_of_key_description(frontmatter) -> None:
         assert entry.get("key"), f"config entry missing 'key': {entry!r}"
         assert entry.get("description"), f"config entry missing 'description': {entry!r}"
         keys.add(entry["key"])
-    assert {"aeon_github_pat", "aeon_fork_repo"} <= keys, f"expected aeon_* keys, got {keys}"
+    # Token-only model: only the PAT is user-provided. The fork repo is
+    # auto-discovered/created and recorded by the skill, not prompted here.
+    assert "aeon_github_pat" in keys, f"expected aeon_github_pat, got {keys}"
 
 
 def test_scripts_present_and_executable() -> None:
