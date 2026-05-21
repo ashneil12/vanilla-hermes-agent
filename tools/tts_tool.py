@@ -303,17 +303,69 @@ def _load_tts_config() -> Dict[str, Any]:
         return {}
 
 
+_LOCAL_TTS_PROVIDERS = frozenset({"edge", "piper", "kittentts", "neutts"})
+
+
+def _auto_detect_cloud_tts() -> str:
+    """First available cloud TTS provider by key presence.
+
+    venice > openai > elevenlabs > xai. Returns ``"none"`` when no cloud key is
+    set. Used as a graceful fallback when a configured local backend (edge /
+    piper / kittentts / neutts) isn't installed, so spoken replies still work
+    instead of erroring with "No TTS provider available".
+    """
+    if os.environ.get("VENICE_API_KEY", "").strip():
+        return "venice"
+    if get_env_value("OPENAI_API_KEY"):
+        return "openai"
+    if get_env_value("ELEVENLABS_API_KEY"):
+        return "elevenlabs"
+    if get_env_value("XAI_API_KEY"):
+        return "xai"
+    return "none"
+
+
+def _local_tts_available(provider: str) -> bool:
+    """Best-effort check whether a local/free TTS backend is usable here."""
+    try:
+        if provider == "edge":
+            _import_edge_tts()
+            return True
+        if provider == "piper":
+            return _check_piper_available()
+        if provider == "kittentts":
+            return _check_kittentts_available()
+        if provider == "neutts":
+            return _check_neutts_available()
+    except Exception:
+        return False
+    return True
+
+
 def _get_provider(tts_config: Dict[str, Any]) -> str:
     """Get the configured TTS provider name.
 
-    Explicit ``tts.provider`` in config.yaml always wins. When unset, we
-    prefer ``venice`` if ``VENICE_API_KEY`` is in env (HermesOS auto-pair
-    so multi-modal lives on the chat key), otherwise fall back to
-    :data:`DEFAULT_PROVIDER` (free Edge TTS).
+    Explicit ``tts.provider`` in config.yaml wins — but if a configured *local*
+    backend (edge / piper / kittentts / neutts) isn't installed in this
+    environment, fall back to an available cloud provider (e.g. Venice) so
+    spoken replies still work. When unset, we prefer ``venice`` if
+    ``VENICE_API_KEY`` is in env (HermesOS auto-pair so multi-modal lives on the
+    chat key), otherwise fall back to :data:`DEFAULT_PROVIDER` (free Edge TTS).
     """
     explicit = tts_config.get("provider")
     if isinstance(explicit, str) and explicit.strip():
-        return explicit.lower().strip()
+        prov = explicit.lower().strip()
+        if prov in _LOCAL_TTS_PROVIDERS and not _local_tts_available(prov):
+            cloud = _auto_detect_cloud_tts()
+            if cloud != "none":
+                logger.warning(
+                    "TTS provider '%s' configured but unavailable; "
+                    "falling back to available cloud provider '%s'",
+                    prov,
+                    cloud,
+                )
+                return cloud
+        return prov
     if os.environ.get("VENICE_API_KEY", "").strip():
         return "venice"
     return DEFAULT_PROVIDER
