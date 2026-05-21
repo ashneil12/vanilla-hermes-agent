@@ -501,9 +501,14 @@ class VeniceVideoGenProvider(VideoGenProvider):
             "model": model_id,
             "prompt": prompt,
             "duration": f"{clamped_duration}s",
-            "aspect_ratio": normalized_aspect_ratio,
             "resolution": normalized_resolution,
         }
+        # aspect_ratio is only valid for pure text-to-video. When a source image
+        # (image_url) or reference images are supplied, the output frame is
+        # derived from that image and Venice rejects the request with
+        # 400 "This model does not support aspect_ratio". Omit it in those modes.
+        if not image_url_norm and not refs:
+            payload["aspect_ratio"] = normalized_aspect_ratio
         if audio is not None:
             payload["audio"] = bool(audio)
         if isinstance(seed, int):
