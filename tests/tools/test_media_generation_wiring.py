@@ -134,6 +134,44 @@ class TestVeniceExtrasWiring:
             )
 
 
+class TestVideoModelResolution:
+    """Dynamic family+mode → variant resolution for Venice video, so the user
+    picks a FAMILY (or Auto) and the agent auto-selects the right
+    text/image/reference-to-video model from the request inputs."""
+
+    def _vv(self):
+        import plugins.video_gen.venice as vv
+
+        return vv
+
+    def test_detect_mode_from_inputs(self):
+        vv = self._vv()
+        assert vv._detect_mode(image_url=None, reference_images=None) == "text-to-video"
+        assert vv._detect_mode(image_url="https://x/a.png", reference_images=None) == "image-to-video"
+        assert vv._detect_mode(image_url=None, reference_images=["https://x/a.png"]) == "reference-to-video"
+
+    def test_family_plus_mode_resolves_variant(self, monkeypatch):
+        vv = self._vv()
+        catalog = [
+            "seedance-2-0-text-to-video", "seedance-2-0-image-to-video",
+            "seedance-2-0-reference-to-video", "wan-2-7-text-to-video",
+            "wan-2-7-image-to-video",
+        ]
+        monkeypatch.setattr(vv, "_video_model_ids", lambda: catalog)
+        assert vv._resolve_concrete_model("seedance-2-0", "image-to-video") == "seedance-2-0-image-to-video"
+        assert vv._resolve_concrete_model("seedance-2-0", "text-to-video") == "seedance-2-0-text-to-video"
+        # a pinned full variant is re-pointed to the actual request mode
+        assert vv._resolve_concrete_model("seedance-2-0-text-to-video", "reference-to-video") == "seedance-2-0-reference-to-video"
+        # family lacking the exact mode falls back sensibly (wan has no reference)
+        assert vv._resolve_concrete_model("wan-2-7", "reference-to-video") == "wan-2-7-image-to-video"
+
+    def test_single_id_family_resolves_to_itself(self, monkeypatch):
+        vv = self._vv()
+        monkeypatch.setattr(vv, "_video_model_ids", lambda: ["veo-3.1", "kling-v3"])
+        # Veo/Kling carry the mode in the payload (image_url switch) → unchanged.
+        assert vv._resolve_concrete_model("veo-3.1", "image-to-video") == "veo-3.1"
+
+
 class TestMediaConfigHonoring:
     """Guard the Settings → Media controls against becoming dead controls:
     the agent generators must read the config defaults the WebUI persists."""
