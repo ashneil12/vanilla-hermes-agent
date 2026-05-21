@@ -169,6 +169,144 @@ def _post_multipart(
     )
 
 
+# ---------------------------------------------------------------------------
+# Managed-proxy upload sizing
+#
+# The HermesOS managed-Venice proxy runs on Vercel, whose Serverless Functions
+# hard-cap the *request body* at 4.5 MB and reject anything larger at the
+# platform layer (HTTP 413 "FUNCTION_PAYLOAD_TOO_LARGE") before our handler ever
+# runs. Image *generate* sends a tiny JSON prompt, but image *edit/upscale/
+# compose/background-remove* upload a full source image — a real photo easily
+# clears 4.5 MB. Venice direct (api.venice.ai) has no such limit, which is why
+# the identical call works against a direct key but 413s through the proxy.
+#
+# So before a managed upload we recompress/downscale the source to fit under the
+# cap (leaving headroom for multipart boundaries + form fields). Quality drops
+# slightly on huge inputs, but the alternative is a hard failure.
+# ---------------------------------------------------------------------------
+MANAGED_UPLOAD_LIMIT_BYTES = 4_000_000  # ~4 MB; safely under Vercel's 4.5 MB body cap
+
+
+def _is_managed_proxy(base_url: str) -> bool:
+    """True when *base_url* targets a HermesOS-managed proxy (not Venice direct)."""
+    return "api.venice.ai" not in (base_url or "").lower()
+
+
+def _shrink_image_bytes(image_bytes: bytes, target_bytes: int) -> bytes:
+    """Best-effort downscale/recompress so ``len(result) <= target_bytes``.
+
+    Returns the original bytes unchanged when already small enough, when Pillow
+    is unavailable, or when the image can't be opened. Photos are re-encoded as
+    JPEG (much smaller); images with transparency stay PNG and shrink by
+    dimension only.
+    """
+    if len(image_bytes) <= target_bytes:
+        return image_bytes
+    try:
+        from PIL import Image
+        import io as _io
+    except ImportError:
+        logger.info(
+            "Pillow unavailable — cannot shrink %d-byte image for managed upload",
+            len(image_bytes),
+        )
+        return image_bytes
+    try:
+        img = Image.open(_io.BytesIO(image_bytes))
+        img.load()
+    except Exception as exc:
+        logger.info("Could not open image for managed-upload shrink: %s", exc)
+        return image_bytes
+
+    has_alpha = img.mode in {"RGBA", "LA", "PA"} or (
+        img.mode == "P" and "transparency" in img.info
+    )
+    if has_alpha:
+        pil_format, quality_steps = "PNG", (None,)
+        if img.mode != "RGBA":
+            img = img.convert("RGBA")
+    else:
+        pil_format, quality_steps = "JPEG", (85, 70, 55, 40)
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+
+    best = image_bytes
+    for attempt in range(6):
+        if attempt == 0:
+            work = img
+        else:
+            scale = 0.8 ** attempt
+            new_w = max(int(img.width * scale), 64)
+            new_h = max(int(img.height * scale), 64)
+            work = img.resize((new_w, new_h))
+        for q in quality_steps:
+            buf = _io.BytesIO()
+            save_kw: Dict[str, Any] = {"format": pil_format, "optimize": True}
+            if q is not None:
+                save_kw["quality"] = q
+            try:
+                work.save(buf, **save_kw)
+            except Exception:
+                continue
+            data = buf.getvalue()
+            if len(data) <= target_bytes:
+                logger.info(
+                    "Shrank image %d->%d bytes for managed upload (%s q=%s %dx%d)",
+                    len(image_bytes), len(data), pil_format, q, work.width, work.height,
+                )
+                return data
+            if len(data) < len(best):
+                best = data
+    logger.info(
+        "Could not shrink image under %d bytes (best %d) for managed upload",
+        target_bytes, len(best),
+    )
+    return best
+
+
+def _prepare_upload_bytes(
+    image_bytes: bytes,
+    image_name: str,
+    base_url: str,
+    *,
+    budget: int = MANAGED_UPLOAD_LIMIT_BYTES,
+) -> Tuple[bytes, str]:
+    """Shrink oversized images before a managed-proxy multipart upload.
+
+    No-op for Venice-direct (no body cap) or already-small images. When a JPEG
+    re-encode happens, the filename extension is corrected so Venice infers the
+    right type.
+    """
+    if not _is_managed_proxy(base_url):
+        return image_bytes, image_name
+    shrunk = _shrink_image_bytes(image_bytes, budget)
+    if len(shrunk) == len(image_bytes):
+        return image_bytes, image_name
+    name = image_name
+    stem = Path(image_name).stem or "image"
+    if shrunk[:3] == b"\xff\xd8\xff":
+        name = f"{stem}.jpg"
+    elif shrunk[:8] == b"\x89PNG\r\n\x1a\n":
+        name = f"{stem}.png"
+    return shrunk, name
+
+
+def _is_payload_too_large(response) -> bool:
+    """Detect Vercel's platform-level 413 (request body over the proxy cap)."""
+    if getattr(response, "status_code", None) == 413:
+        return True
+    try:
+        return "FUNCTION_PAYLOAD_TOO_LARGE" in (response.text or "")
+    except Exception:
+        return False
+
+
+_TOO_LARGE_MESSAGE = (
+    "Image is too large to upload through managed Venice (4.5 MB request limit). "
+    "Try a smaller source image, or switch to a direct Venice API key."
+)
+
+
 def _success(image_path: str, *, tool: str, model: str = "", extra: Optional[Dict[str, Any]] = None) -> str:
     payload: Dict[str, Any] = {
         "success": True,
@@ -243,6 +381,7 @@ def image_upscale_tool(
         image_bytes, image_name = _open_image_for_upload(image)
     except Exception as exc:
         return _error(f"Could not read image: {exc}", tool="image_upscale", error_type="bad_input")
+    image_bytes, image_name = _prepare_upload_bytes(image_bytes, image_name, base_url)
 
     if scale < 1 or scale > 4:
         scale = max(1, min(4, scale))
@@ -271,6 +410,8 @@ def image_upscale_tool(
         return _error(f"Venice request failed: {exc}", tool="image_upscale", error_type="connection_error")
 
     if response.status_code != 200:
+        if _is_payload_too_large(response):
+            return _error(_TOO_LARGE_MESSAGE, tool="image_upscale", error_type="image_too_large")
         return _error(
             f"Venice upscale failed ({response.status_code}): {_decode_error_message(response)}",
             tool="image_upscale", error_type="api_error",
@@ -370,6 +511,7 @@ def image_edit_tool(
         image_bytes, image_name = _open_image_for_upload(image)
     except Exception as exc:
         return _error(f"Could not read image: {exc}", tool="image_edit", error_type="bad_input")
+    image_bytes, image_name = _prepare_upload_bytes(image_bytes, image_name, base_url)
 
     chosen_model = (model or DEFAULT_EDIT_MODEL).strip() or DEFAULT_EDIT_MODEL
 
@@ -393,6 +535,8 @@ def image_edit_tool(
         return _error(f"Venice request failed: {exc}", tool="image_edit", error_type="connection_error")
 
     if response.status_code != 200:
+        if _is_payload_too_large(response):
+            return _error(_TOO_LARGE_MESSAGE, tool="image_edit", error_type="image_too_large")
         return _error(
             f"Venice edit failed ({response.status_code}): {_decode_error_message(response)}",
             tool="image_edit", error_type="api_error",
@@ -498,6 +642,18 @@ def image_compose_tool(
     if not isinstance(prompt, str) or not prompt.strip():
         return _error("prompt is required", tool="image_compose", error_type="missing_prompt")
 
+    # Managed proxy (Vercel) caps the whole JSON body at 4.5 MB and base64
+    # inflates raw bytes by ~4/3, so budget the *raw* bytes across all inlined
+    # images at ~3 MB total (URLs aren't inlined, so they don't count).
+    inline_count = sum(
+        1 for e in images if isinstance(e, str) and not _is_http_url(e.strip())
+    )
+    per_image_raw_budget = (
+        max(300_000, 3_000_000 // max(1, inline_count))
+        if _is_managed_proxy(base_url)
+        else 0
+    )
+
     encoded: List[str] = []
     for entry in images:
         if not isinstance(entry, str) or not entry.strip():
@@ -510,6 +666,8 @@ def image_compose_tool(
             data_bytes, _ = _open_image_for_upload(candidate)
         except Exception as exc:
             return _error(f"Could not read image '{entry}': {exc}", tool="image_compose", error_type="bad_input")
+        if per_image_raw_budget:
+            data_bytes = _shrink_image_bytes(data_bytes, per_image_raw_budget)
         encoded.append(base64.b64encode(data_bytes).decode("ascii"))
 
     chosen_model = (model or DEFAULT_EDIT_MODEL).strip() or DEFAULT_EDIT_MODEL
@@ -542,6 +700,8 @@ def image_compose_tool(
         return _error(f"Venice request failed: {exc}", tool="image_compose", error_type="connection_error")
 
     if response.status_code != 200:
+        if _is_payload_too_large(response):
+            return _error(_TOO_LARGE_MESSAGE, tool="image_compose", error_type="image_too_large")
         return _error(
             f"Venice multi-edit failed ({response.status_code}): {_decode_error_message(response)}",
             tool="image_compose", error_type="api_error",
@@ -660,6 +820,7 @@ def image_remove_background_tool(image: str) -> str:
             image_bytes, image_name = _open_image_for_upload(candidate)
         except Exception as exc:
             return _error(f"Could not read image: {exc}", tool="image_remove_background", error_type="bad_input")
+        image_bytes, image_name = _prepare_upload_bytes(image_bytes, image_name, base_url)
         try:
             response = _post_multipart(
                 "/image/background-remove",
@@ -670,6 +831,8 @@ def image_remove_background_tool(image: str) -> str:
             return _error(f"Venice request failed: {exc}", tool="image_remove_background", error_type="connection_error")
 
     if response.status_code != 200:
+        if _is_payload_too_large(response):
+            return _error(_TOO_LARGE_MESSAGE, tool="image_remove_background", error_type="image_too_large")
         return _error(
             f"Venice background-remove failed ({response.status_code}): {_decode_error_message(response)}",
             tool="image_remove_background", error_type="api_error",
