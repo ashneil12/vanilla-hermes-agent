@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# aeon-setup.sh — ensure the user has an Aeon fork, creating one if needed.
+# aeon-setup.sh — ensure the user has an Aeon fork, creating one if needed, and
+# wire its run-eligibility gate.
 #
 # Resolution order: recorded in config -> existing fork of aaronjmars/aeon in
 # the account -> fork aaronjmars/aeon. Persists the result to config.yaml and
-# prints the owner/repo slug on stdout. Run this once before delegating; the
-# other scripts then auto-resolve the fork.
+# prints the owner/repo slug on stdout. If HERMES_INSTANCE_ID + HERMES_AEON_GATE_URL
+# are present in the env (the dashboard injects them), also sets them as repo
+# variables so the fork's gate job skips scheduled work while this instance is
+# paused/stopped/suspended.
 set -euo pipefail
 source "$(dirname "$0")/_lib.sh"
 _aeon_load_pat
@@ -30,6 +33,23 @@ fi
 [[ -z "$repo" ]] && { echo "Could not discover or create an Aeon fork." >&2; exit 1; }
 
 _aeon_persist_repo "$repo"
+
+# --- Wire the run-eligibility gate (best-effort) ---------------------------
+# The dashboard injects HERMES_INSTANCE_ID + HERMES_AEON_GATE_URL into this
+# container. Setting them as repo variables arms the fork's `gate` job, which
+# skips scheduled work whenever the dashboard reports the instance inactive.
+if [[ -n "${HERMES_INSTANCE_ID:-}" && -n "${HERMES_AEON_GATE_URL:-}" ]]; then
+  if GH_TOKEN="$AEON_PAT" gh variable set HERMES_AEON_GATE_URL --repo "$repo" --body "$HERMES_AEON_GATE_URL" >/dev/null 2>&1 \
+     && GH_TOKEN="$AEON_PAT" gh variable set HERMES_INSTANCE_ID --repo "$repo" --body "$HERMES_INSTANCE_ID" >/dev/null 2>&1; then
+    echo "Run-eligibility gate wired (instance $HERMES_INSTANCE_ID)." >&2
+  else
+    echo "WARN: could not set gate repo variables (PAT scope?). Scheduled runs won't be pause-gated." >&2
+  fi
+  # The `gate` job itself must exist in the fork's messages.yml. It ships in
+  # aaronjmars/aeon (upstream PR) so forks inherit it; if a fork predates that,
+  # the variables are harmless no-ops until the workflow is updated.
+fi
+
 echo "$repo"
 {
   echo "Aeon fork ready: $repo"
