@@ -7,13 +7,14 @@ _aeon_load_config
 
 SINCE_ISO="${1:-}"
 if [[ -z "$SINCE_ISO" ]]; then
-  if date -u -v-24H +%Y-%m-%dT%H:%M:%SZ >/dev/null 2>&1; then
-    SINCE_ISO=$(date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)   # BSD/macOS
-  else
-    SINCE_ISO=$(date -u -d "24 hours ago" +%Y-%m-%dT%H:%M:%SZ)  # GNU
-  fi
+  SINCE_ISO="$(python3 -c "import datetime;print((datetime.datetime.utcnow()-datetime.timedelta(hours=24)).strftime('%Y-%m-%dT%H:%M:%SZ'))")"
 fi
 
-GH_TOKEN="$AEON_PAT" gh api \
-  "repos/$AEON_FORK_REPO/commits?path=outputs&since=$SINCE_ISO" \
-  --jq '.[] | "\(.sha[:7])  \(.commit.author.date)  \(.commit.message | split("\n")[0])"'
+_aeon_api GET "repos/$AEON_FORK_REPO/commits?path=outputs&since=$SINCE_ISO" | python3 -c "
+import sys, json
+for c in (json.load(sys.stdin) or []):
+    sha = c.get('sha', '')[:7]
+    date = c.get('commit', {}).get('author', {}).get('date', '')
+    msg = c.get('commit', {}).get('message', '').split(chr(10))[0]
+    print(f'{sha}  {date}  {msg}')
+"

@@ -4,10 +4,7 @@ set -euo pipefail
 source "$(dirname "$0")/_lib.sh"
 _aeon_load_config
 
-GH_TOKEN="$AEON_PAT" gh api \
-  -H "Accept: application/vnd.github.raw" \
-  "repos/$AEON_FORK_REPO/contents/skills.json" \
-  | python3 -c "
+_AEON_RAW=1 _aeon_api GET "repos/$AEON_FORK_REPO/contents/skills.json" | python3 -c "
 import json, sys
 data = json.load(sys.stdin)
 skills = data.get('skills', [])
