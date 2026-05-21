@@ -85,7 +85,7 @@ jobs:
         run: |
           docker run --rm \
             --entrypoint sh \
-            ghcr.io/ashneil12/vanilla-hermes-agent-canary:test \
+            ghcr.io/ashneil12/vanilla-hermes-agent:test \
             -lc 'cd /opt/hermes && /opt/hermes/.venv/bin/python3 -m pytest tests/tools/test_media_generation_wiring.py -q'
 
       - name: Log in to GitHub Container Registry
