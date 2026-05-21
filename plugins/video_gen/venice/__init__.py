@@ -350,6 +350,20 @@ class VeniceVideoGenProvider(VideoGenProvider):
     def list_models(self) -> List[Dict[str, Any]]:
         return [{"id": mid, **meta} for mid, meta in _MODELS.items()]
 
+    def list_model_families(self) -> List[str]:
+        """Switchable family ids from the LIVE catalog (mode suffix stripped),
+        so the agent can override per-request via ``model=<family>`` (e.g.
+        "use Kling"). Falls back to the static catalog when the live list is
+        unavailable."""
+        fams: List[str] = []
+        seen = set()
+        for mid in _video_model_ids():
+            stem = _strip_mode_suffix(mid)
+            if stem and stem not in seen:
+                seen.add(stem)
+                fams.append(stem)
+        return fams or list(_MODELS.keys())
+
     def default_model(self) -> Optional[str]:
         return DEFAULT_MODEL
 
