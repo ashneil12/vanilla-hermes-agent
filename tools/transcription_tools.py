@@ -225,11 +225,12 @@ def _auto_detect_cloud_stt() -> str:
 def _get_provider(stt_config: dict) -> str:
     """Determine which STT provider to use.
 
-    When ``stt.provider`` is explicitly set, that choice is honoured — but if a
-    configured *local* backend isn't installed we fall back to an available
-    cloud provider rather than failing (so out-of-the-box voice works on
-    instances that have a cloud key like Venice). When no provider is
-    configured, auto-detect tries: local > groq (free) > openai > venice > xai.
+    When ``stt.provider`` is explicitly set, that choice is authoritative and is
+    never silently swapped for a different cloud provider (GH-1774): an explicit
+    *local* choice without a local backend resolves to ``none`` rather than a
+    cloud key. When no provider is configured, auto-detect tries:
+    local > groq (free) > openai > venice > xai, so out-of-the-box voice still
+    works on instances that only have a cloud key like Venice.
     """
     if not is_stt_enabled(stt_config):
         return "none"
@@ -245,14 +246,10 @@ def _get_provider(stt_config: dict) -> str:
                 return "local"
             if _has_local_command():
                 return "local_command"
-            _cloud = _auto_detect_cloud_stt()
-            if _cloud != "none":
-                logger.warning(
-                    "STT provider 'local' configured but unavailable; "
-                    "falling back to available cloud provider '%s'",
-                    _cloud,
-                )
-                return _cloud
+            # GH-1774: an explicit `local` choice is authoritative — never
+            # silently swap in a cloud provider (the user opted into on-device
+            # transcription for privacy/cost). Auto mode (no provider set) still
+            # picks an available cloud provider, including Venice.
             logger.warning(
                 "STT provider 'local' configured but unavailable "
                 "(install faster-whisper or set HERMES_LOCAL_STT_COMMAND)"
