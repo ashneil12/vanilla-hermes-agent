@@ -10,6 +10,10 @@ on:
       - 'uv.lock'
       - 'Dockerfile'
       - 'docker/**'
+      # Bundled skills are COPYed into the image — skill edits must rebuild it,
+      # or the image's /opt/hermes/skills (and thus every install) stays stale.
+      - 'skills/**'
+      - 'optional-skills/**'
       - '.github/workflows/docker-publish.yml'
   release:
     types: [published]
