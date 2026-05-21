@@ -12,11 +12,8 @@ metadata:
     related_skills: [hermes-agent, github]
     config:
       - key: aeon_github_pat
-        description: GitHub PAT (classic, repo + workflow scopes) for the user's Aeon fork.
+        description: GitHub PAT (classic, repo + workflow scopes). The fork is auto-discovered or created.
         prompt: GitHub Personal Access Token
-      - key: aeon_fork_repo
-        description: The user's Aeon fork in owner/repo form, e.g. ashneil12/aeon.
-        prompt: Aeon fork repo (owner/repo)
 ---
 
 # Aeon Skill
@@ -43,21 +40,30 @@ Stay inline (do NOT delegate) when:
 
 ## Prerequisites
 
-This skill reads two values from `config.yaml` (shown in the `[Skill config: ...]` block above when set):
+The user pastes a classic GitHub PAT (`repo` + `workflow` scopes) in **Settings → AEON** (one-time). It lands in `config.yaml` as `aeon_github_pat` and appears in the `[Skill config: ...]` block above. If that token shows `(not set)`, do not run the scripts — tell the user to enable AEON in Settings first.
 
-- `aeon_github_pat` — a classic GitHub PAT with `repo` + `workflow` scopes
-- `aeon_fork_repo` — the user's Aeon fork, e.g. `ashneil12/aeon`
+You do NOT need a fork repo up front. It's resolved for you: an already-recorded fork is reused; otherwise an existing fork of `aaronjmars/aeon` in the account is auto-discovered; otherwise `aeon-setup.sh` forks `aaronjmars/aeon` to create one. The scripts auto-load the token and resolve the fork from `config.yaml` — you never pass the token yourself.
 
-The user sets both in **Settings → AEON** in the Hermes WebUI (one-time). If the config block above shows either as `(not set)`, do not run the scripts — tell the user to enable AEON in Settings first. The user must also have forked `aaronjmars/aeon` and added `ANTHROPIC_API_KEY` (or `CLAUDE_CODE_OAUTH_TOKEN`) + a notification channel as Actions secrets on their fork.
+## First-Time Setup (discover or create the fork)
 
-The helper scripts auto-load both values from `config.yaml` — you never need to pass the token yourself.
+The first time you decide Aeon fits, resolve the fork:
+
+```
+bash scripts/aeon-setup.sh
+```
+
+It discovers the user's existing Aeon fork or, if there is none, forks `aaronjmars/aeon` into their account, then records the repo so later calls find it.
+
+- If a fork **already exists**, use it as-is and add to it. Only clone, reset, or restructure it **after asking the user first**.
+- If you had to **create** one, tell the user — a fresh fork needs `ANTHROPIC_API_KEY` (or `CLAUDE_CODE_OAUTH_TOKEN`) + a notification channel as Actions secrets before scheduled runs work. Confirm before the first autonomous run.
 
 ## How to Run
 
-Use the `terminal` tool to run the helper scripts in this skill's `scripts/` directory. Each script self-loads credentials; just call it.
+Use the `terminal` tool to run the helper scripts in this skill's `scripts/` directory. Each script self-loads credentials and resolves the fork; just call it.
 
 | Operation | Command |
 |---|---|
+| Find or create the fork | `bash scripts/aeon-setup.sh` |
 | List available skills | `bash scripts/aeon-list-skills.sh` |
 | Invoke a skill now | `bash scripts/aeon-invoke.sh <slug> [var]` |
 | Enable/schedule a skill | `bash scripts/aeon-enable-skill.sh <slug> "<cron>"` |
@@ -76,16 +82,18 @@ bash scripts/aeon-check-outputs.sh                     # what ran recently
 ## Procedure
 
 1. **Classify** the request against the When-to-Use rubric. If it stays inline, stop and just do it.
-2. **Discover**: run `aeon-list-skills.sh` and match candidates by description. Note any `[SPEND]` flag.
-3. **Gate spend**: if a candidate is `[SPEND]`, surface it and require explicit user approval before invoking.
-4. **Act**: one-shot → `aeon-invoke.sh`; recurring → `aeon-enable-skill.sh` with a cron string.
-5. **Confirm**: tell the user where to expect the result (their Aeon Telegram/Discord channel, or the next Hermes session via output ingestion).
+2. **Ensure a fork** (first time): run `aeon-setup.sh`. It discovers or creates the fork. Ask before any destructive action on an existing one.
+3. **Discover skills**: run `aeon-list-skills.sh` and match candidates by description. Note any `[SPEND]` flag.
+4. **Gate spend**: if a candidate is `[SPEND]`, surface it and require explicit user approval before invoking.
+5. **Act**: one-shot → `aeon-invoke.sh`; recurring → `aeon-enable-skill.sh` with a cron string.
+6. **Confirm**: tell the user where to expect the result (their Aeon Telegram/Discord channel, or the next Hermes session via output ingestion).
 
 To surface what Aeon did while the user was away, run `aeon-check-outputs.sh` and read the new `outputs/<skill>/<date>.md` files.
 
 ## Pitfalls
 
-- **Not configured** → scripts exit with "AEON not configured". Tell the user to set the PAT + fork repo in Settings → AEON. Do not try to work around it.
+- **Token not set** → scripts exit with "AEON not configured". Tell the user to paste a GitHub token in Settings → AEON. Do not work around it.
+- **No fork yet** → read/invoke scripts exit with "No Aeon fork found … run aeon-setup.sh". Run `aeon-setup.sh` to discover or create it, then retry.
 - **workflow_dispatch ignores `var` from aeon.yml** → on manual invokes, always pass `var` explicitly via `aeon-invoke.sh <slug> <var>`. Scheduled cron runs read their configured var automatically.
 - **`[SPEND]` skills** → the upstream catalog has `distribute-tokens` and `contributor-reward` that move money. Treat them as approval-required even if the manifest lacks the spend flag.
 - **PAT scope** → a fine-grained PAT scoped to one repo breaks self-push on the fork. A classic PAT with `repo` + `workflow` is required.
