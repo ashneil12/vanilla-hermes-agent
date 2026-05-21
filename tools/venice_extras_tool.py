@@ -231,6 +231,85 @@ def video_quote_tool(model: str, duration: Optional[str] = None) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# crypto RPC — read-only on-chain awareness (EVM + others) via Venice
+# --------------------------------------------------------------------------- #
+# State-changing / signing methods are blocked outright: this tool is
+# read-only by design. Signing a transaction needs a wallet + private key the
+# agent must never hold, so "send" ships as its own follow-on once a signing
+# layer exists. Until then we expose reads (balances, blocks, logs, eth_call).
+_BLOCKED_RPC_METHODS = {
+    "eth_sendtransaction", "eth_sendrawtransaction",
+    "eth_sign", "eth_signtransaction", "eth_signtypeddata", "eth_signtypeddata_v4",
+    "personal_sendtransaction", "personal_sign", "personal_unlockaccount",
+    "personal_importrawkey", "personal_newaccount",
+}
+
+
+def crypto_rpc_tool(
+    network: Optional[str] = None,
+    method: Optional[str] = None,
+    params: Optional[list] = None,
+) -> str:
+    """Read on-chain data via Venice's JSON-RPC proxy.
+
+    ``network='list'`` enumerates supported networks; otherwise calls *method*
+    (a read-only JSON-RPC method) on *network* with optional *params*.
+    """
+    err = _need_key()
+    if err:
+        return err
+    _, base = _creds()
+    net = (network or "").strip()
+    try:
+        import requests
+
+        if not net or net.lower() in ("list", "networks"):
+            resp = requests.get(f"{base}/crypto/rpc/networks", headers=_headers(), timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+            if isinstance(data, dict):
+                nets = data.get("networks") or data.get("data")
+            else:
+                nets = data
+            return json.dumps({"success": True, "networks": nets})
+
+        if not method or not str(method).strip():
+            return json.dumps({
+                "success": False,
+                "error": "method is required (e.g. eth_blockNumber). Use network='list' to see supported networks.",
+                "error_type": "missing_method",
+            })
+        m = str(method).strip()
+        if m.lower() in _BLOCKED_RPC_METHODS:
+            return json.dumps({
+                "success": False,
+                "error": (
+                    f"'{m}' changes state / needs a signature and is disabled. This tool is "
+                    "read-only (no wallet, no signing). Use read methods like eth_blockNumber, "
+                    "eth_getBalance, eth_call, eth_getTransactionReceipt, eth_getLogs."
+                ),
+                "error_type": "write_method_blocked",
+            })
+        payload: Dict[str, Any] = {
+            "jsonrpc": "2.0",
+            "method": m,
+            "params": params if isinstance(params, list) else [],
+            "id": 1,
+        }
+        resp = requests.post(
+            f"{base}/crypto/rpc/{net}",
+            headers=_headers({"Content-Type": "application/json"}),
+            json=payload,
+            timeout=_HTTP_TIMEOUT,
+        )
+        resp.raise_for_status()
+        return json.dumps({"success": True, "network": net, "result": resp.json()})
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("crypto rpc failed", exc_info=True)
+        return json.dumps({"success": False, "error": f"Venice crypto RPC failed: {exc}", "error_type": "api_error"})
+
+
+# --------------------------------------------------------------------------- #
 # registrations
 # --------------------------------------------------------------------------- #
 registry.register(
@@ -355,4 +434,35 @@ registry.register(
     requires_env=["VENICE_API_KEY"],
     is_async=False,
     emoji="💵",
+)
+
+registry.register(
+    name="crypto_rpc",
+    toolset="crypto",
+    schema={
+        "name": "crypto_rpc",
+        "description": (
+            "Read on-chain data via Venice's crypto JSON-RPC proxy (EVM chains + more). "
+            "Pass network='list' FIRST to enumerate supported networks. Network ids are "
+            "full names like 'ethereum-mainnet', 'base-mainnet', 'arbitrum-mainnet', "
+            "'polygon-mainnet', 'optimism-mainnet'. Then pass network + a READ-only "
+            "JSON-RPC method (eth_blockNumber, eth_getBalance, eth_call, "
+            "eth_getTransactionReceipt, eth_getLogs, eth_gasPrice, …) and optional params. "
+            "Read-only by design: signing/sending transactions is disabled (no wallet)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "network": {"type": "string", "description": "Full network id (e.g. ethereum-mainnet, base-mainnet, arbitrum-mainnet). Use 'list' to enumerate supported networks first."},
+                "method": {"type": "string", "description": "Read-only JSON-RPC method, e.g. eth_blockNumber, eth_getBalance, eth_call."},
+                "params": {"type": "array", "description": "JSON-RPC params array (method-specific). Optional.", "items": {}},
+            },
+            "required": ["network"],
+        },
+    },
+    handler=lambda args, **kw: crypto_rpc_tool(args.get("network"), args.get("method"), args.get("params")),
+    check_fn=check_venice_requirements,
+    requires_env=["VENICE_API_KEY"],
+    is_async=False,
+    emoji="⛓️",
 )
