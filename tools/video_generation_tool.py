@@ -520,6 +520,26 @@ def _build_dynamic_video_schema() -> Dict[str, Any]:
         line += f" · model: {active_model}"
     parts.append(line)
 
+    # Switchable model menu — lets the agent honor "use Kling/Wan/Veo" by
+    # passing model=<family> for ONE request (explicit arg overrides the
+    # configured default). Sourced from the provider's live catalog so the ids
+    # are always current; the right text/image/reference variant is auto-picked.
+    try:
+        families = (
+            provider.list_model_families()
+            if hasattr(provider, "list_model_families")
+            else []
+        )
+    except Exception:
+        families = []
+    if families:
+        shown = ", ".join(families[:16])
+        parts.append(
+            "- to switch model for ONE request, pass `model=` a family id: "
+            f"{shown}. The configured model is only the default; the matching "
+            "text/image/reference-to-video variant is selected automatically."
+        )
+
     # Model-specific caveats (the high-signal stuff)
     for c in _format_model_caveats(model_meta, caps):
         parts.append(f"- {c}")
