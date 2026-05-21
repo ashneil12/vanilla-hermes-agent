@@ -313,7 +313,7 @@ registry.register(
     name="audio_generate",
     toolset="video_gen",
     schema=AUDIO_GENERATE_SCHEMA,
-    handler=lambda **kw: audio_generate_tool(**kw),
+    handler=lambda args, **kw: audio_generate_tool(**args),
     check_fn=check_audio_generate_requirements,
     requires_env=["VENICE_API_KEY"],
     is_async=False,
