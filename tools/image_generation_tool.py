@@ -981,6 +981,26 @@ def _read_configured_image_model():
     return None
 
 
+def _read_configured_image_style():
+    """Return the value of ``image_gen.style_preset`` from config.yaml, or None.
+
+    Set via the WebUI Settings → Media "Style" dropdown (which lists the
+    presets from Venice ``/image/styles``). Only the Venice image provider
+    consumes ``style_preset`` today; other providers ignore the kwarg.
+    """
+    try:
+        from hermes_cli.config import load_config
+        cfg = load_config()
+        section = cfg.get("image_gen") if isinstance(cfg, dict) else None
+        if isinstance(section, dict):
+            value = section.get("style_preset")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    except Exception as exc:
+        logger.debug("Could not read image_gen.style_preset: %s", exc)
+    return None
+
+
 def _read_configured_image_provider():
     """Return the value of ``image_gen.provider`` from config.yaml, or None.
 
@@ -1071,10 +1091,16 @@ def _dispatch_to_plugin_provider(prompt: str, aspect_ratio: str):
             "error_type": "provider_not_registered",
         })
 
+    # Also read a configured style preset so the WebUI's Media "Style"
+    # dropdown becomes a live default (the Venice provider honors it).
+    configured_style = _read_configured_image_style()
+
     try:
         kwargs = {"prompt": prompt, "aspect_ratio": aspect_ratio}
         if configured_model:
             kwargs["model"] = configured_model
+        if configured_style:
+            kwargs["style_preset"] = configured_style
         result = provider.generate(**kwargs)
     except Exception as exc:
         logger.warning(

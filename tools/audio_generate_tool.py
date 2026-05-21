@@ -44,6 +44,27 @@ def _resolve_credentials() -> Tuple[str, str]:
     return api_key, base_url
 
 
+def _read_configured_audio_model() -> Optional[str]:
+    """Return ``audio_gen.model`` from config.yaml, or None.
+
+    Set via the WebUI Settings → Media "Music model" dropdown. Lets the user
+    pin a default music/audio model without passing it on every call. An
+    explicit ``model`` argument (from the LLM) still wins.
+    """
+    try:
+        from hermes_cli.config import load_config
+
+        cfg = load_config()
+        section = cfg.get("audio_gen") if isinstance(cfg, dict) else None
+        if isinstance(section, dict):
+            value = section.get("model")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    except Exception as exc:
+        logger.debug("Could not read audio_gen.model: %s", exc)
+    return None
+
+
 def _audio_cache_dir() -> Path:
     from hermes_constants import get_hermes_home
 
@@ -190,7 +211,7 @@ def audio_generate_tool(
             {"success": False, "error": "prompt is required", "error_type": "missing_prompt"}
         )
 
-    chosen_model = (model or DEFAULT_AUDIO_MODEL).strip() or DEFAULT_AUDIO_MODEL
+    chosen_model = (model or _read_configured_audio_model() or DEFAULT_AUDIO_MODEL).strip() or DEFAULT_AUDIO_MODEL
     duration = duration_seconds if isinstance(duration_seconds, int) else DEFAULT_DURATION_SECONDS
     duration = max(1, min(300, duration))
 

@@ -55,6 +55,10 @@ _HERMES_CORE_TOOLS = [
     # listed here so their toolsets stay a subset of the platform composite.
     "image_styles", "text_parser", "video_transcribe", "voice_clone",
     "audio_quote", "video_quote",
+    # On-chain reads (tools/venice_extras_tool.py): read-only JSON-RPC via
+    # Venice's crypto proxy. Same subset-check reasoning as above — listed
+    # here so the ``crypto`` toolset stays a subset of the platform composite.
+    "crypto_rpc",
     # Multimodal config tool (model picker per modality). Registered under
     # ``toolset="config"`` — needs to be in core so the resolver's recovery
     # loop treats the toolset as a subset of the platform composite.
@@ -175,6 +179,16 @@ TOOLSETS = {
             "or keyboard focus. Works with any tool-capable model."
         ),
         "tools": ["computer_use"],
+        "includes": []
+    },
+
+    "crypto": {
+        "description": (
+            "Read-only on-chain data via Venice's crypto JSON-RPC proxy "
+            "(EVM chains + more): balances, blocks, logs, eth_call, gas. "
+            "Signing/sending is disabled (no wallet). Uses VENICE_API_KEY."
+        ),
+        "tools": ["crypto_rpc"],
         "includes": []
     },
 
