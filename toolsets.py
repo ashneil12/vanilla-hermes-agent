@@ -153,12 +153,12 @@ TOOLSETS = {
 
     "video_gen": {
         "description": (
-            "Video generation tools. Single ``video_generate`` tool covers "
-            "text-to-video (prompt only) and image-to-video (prompt + "
-            "image_url) — the active backend auto-routes. Configure via "
-            "``hermes tools`` → Video Generation."
+            "Video + audio generation. ``video_generate`` covers text-to-video "
+            "(prompt only) and image-to-video (prompt + image_url); "
+            "``audio_generate`` generates music and sound effects (Venice). The "
+            "active backend auto-routes. Configure via ``hermes tools`` → Video Generation."
         ),
-        "tools": ["video_generate"],
+        "tools": ["video_generate", "audio_generate"],
         "includes": []
     },
 
