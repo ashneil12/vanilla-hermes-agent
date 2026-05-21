@@ -67,6 +67,17 @@ def check_audio_generate_requirements() -> bool:
     return bool(api_key)
 
 
+_AUDIO_EXT_BY_CT = {
+    "audio/mpeg": "mp3",
+    "audio/mp3": "mp3",
+    "audio/wav": "wav",
+    "audio/x-wav": "wav",
+    "audio/wave": "wav",
+    "audio/flac": "flac",
+    "audio/x-flac": "flac",
+}
+
+
 async def _queue_and_poll(
     *,
     api_key: str,
@@ -74,21 +85,34 @@ async def _queue_and_poll(
     payload: Dict[str, Any],
     poll_timeout: int,
     poll_interval: int,
-) -> Tuple[str, Dict[str, Any]]:
-    """Submit to /audio/queue, then poll /audio/{id} until done.
+) -> Tuple[str, bytes, str]:
+    """Submit to ``/audio/queue``, then poll ``POST /audio/retrieve`` until the
+    rendered audio is returned.
 
-    Returns ``(queue_id, body_when_done)``. Raises on terminal errors.
+    Venice's audio queue API works in three steps (per docs):
+      1. ``POST /audio/queue``     → ``{queue_id, status: "QUEUED"}``
+      2. ``POST /audio/retrieve``  → JSON ``{status: "PROCESSING"}`` while the
+         job runs, then the raw audio bytes (``audio/mpeg|wav|flac``) once done.
+         ``delete_media_on_completion`` makes Venice clean up server-side after
+         this download, so no separate ``/audio/complete`` call is needed.
+      3. ``POST /audio/complete``  → only required if retrieve didn't delete.
+
+    Both queue and retrieve require ``model`` + ``queue_id``. Returns
+    ``(queue_id, audio_bytes, ext)``. Raises on terminal errors / timeout.
     """
     import httpx
+
+    model = payload.get("model")
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "User-Agent": "hermes-agent/audio-gen-venice",
+    }
 
     async with httpx.AsyncClient() as client:
         submit = await client.post(
             f"{base_url}/audio/queue",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-                "User-Agent": "hermes-agent/audio-gen-venice",
-            },
+            headers=headers,
             json=payload,
             timeout=60,
         )
@@ -101,27 +125,44 @@ async def _queue_and_poll(
         elapsed = 0.0
         last_status = "QUEUED"
         while elapsed < poll_timeout:
-            poll = await client.get(
-                f"{base_url}/audio/{queue_id}",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "User-Agent": "hermes-agent/audio-gen-venice",
-                },
-                timeout=30,
-            )
-            poll.raise_for_status()
-            body = poll.json()
-            last_status = str(body.get("status") or "").upper()
-            if last_status in {"DONE", "COMPLETED", "SUCCEEDED"}:
-                return queue_id, body
-            if last_status in {"FAILED", "ERROR", "EXPIRED", "CANCELLED", "CANCELED"}:
-                raise RuntimeError(
-                    f"Venice audio generation ended with status {last_status}: {body.get('error') or body.get('message')}"
-                )
             await asyncio.sleep(poll_interval)
             elapsed += poll_interval
+            poll = await client.post(
+                f"{base_url}/audio/retrieve",
+                headers=headers,
+                json={
+                    "model": model,
+                    "queue_id": queue_id,
+                    "delete_media_on_completion": True,
+                },
+                timeout=60,
+            )
+            content_type = (poll.headers.get("content-type") or "").split(";")[0].strip().lower()
+            # Completed: Venice streams the rendered audio back as binary.
+            if poll.status_code == 200 and content_type.startswith("audio/"):
+                ext = _AUDIO_EXT_BY_CT.get(content_type, "mp3")
+                return queue_id, poll.content, ext
+            # Otherwise expect a JSON status envelope (still processing / error).
+            try:
+                body = poll.json()
+            except Exception:
+                body = {}
+            last_status = str(body.get("status") or "").upper()
+            if last_status in {"FAILED", "ERROR", "EXPIRED", "CANCELLED", "CANCELED"}:
+                raise RuntimeError(
+                    f"Venice audio generation ended with status {last_status}: "
+                    f"{body.get('error') or body.get('message')}"
+                )
+            # A 4xx that is NOT a transient "still queued/processing" state is fatal.
+            if poll.status_code >= 400 and last_status not in {"PROCESSING", "QUEUED", "PENDING", ""}:
+                raise RuntimeError(
+                    f"Venice audio retrieve failed ({poll.status_code}): "
+                    f"{body.get('error') or poll.text[:200]}"
+                )
 
-        raise TimeoutError(f"Timed out waiting for Venice audio after {poll_timeout}s (last status: {last_status})")
+        raise TimeoutError(
+            f"Timed out waiting for Venice audio after {poll_timeout}s (last status: {last_status})"
+        )
 
 
 def audio_generate_tool(
@@ -170,7 +211,7 @@ def audio_generate_tool(
     try:
         loop = asyncio.new_event_loop()
         try:
-            queue_id, body = loop.run_until_complete(
+            queue_id, audio_bytes, audio_ext = loop.run_until_complete(
                 _queue_and_poll(
                     api_key=api_key,
                     base_url=base_url,
@@ -188,40 +229,28 @@ def audio_generate_tool(
     except Exception as exc:
         return json.dumps({"success": False, "error": f"Venice audio generation failed: {exc}", "error_type": "api_error"})
 
-    # Venice's done-state payload typically includes a download_url. If
-    # the response is base64 inline instead, decode it.
-    url = body.get("download_url") or body.get("url") or (body.get("audio") or {}).get("url")
-    b64 = (body.get("audio") or {}).get("b64") if isinstance(body.get("audio"), dict) else None
-
-    audio_ref: Optional[str] = None
-    if isinstance(url, str) and url.strip():
-        audio_ref = url
-    elif isinstance(b64, str) and b64:
-        try:
-            import base64
-
-            data = base64.b64decode(b64)
-            saved = _save_binary_audio(data, prefix=f"venice_audio_{chosen_model}", ext="mp3")
-            audio_ref = str(saved)
-        except Exception as exc:
-            return json.dumps(
-                {"success": False, "error": f"Could not save audio: {exc}", "error_type": "io_error"}
-            )
-
-    if not audio_ref:
+    # Venice's /audio/retrieve returns the rendered audio as raw bytes once the
+    # job completes; persist it to the audio cache and hand back the local path.
+    if not audio_bytes:
         return json.dumps(
             {
                 "success": False,
-                "error": "Venice audio generation completed without an audio URL or payload",
+                "error": "Venice audio generation completed but returned no audio data",
                 "error_type": "empty_response",
             }
+        )
+    try:
+        saved = _save_binary_audio(audio_bytes, prefix=f"venice_audio_{chosen_model}", ext=audio_ext)
+    except Exception as exc:
+        return json.dumps(
+            {"success": False, "error": f"Could not save audio: {exc}", "error_type": "io_error"}
         )
 
     return json.dumps(
         {
             "success": True,
-            "audio": audio_ref,
-            "model": body.get("model") or chosen_model,
+            "audio": str(saved),
+            "model": chosen_model,
             "provider": "venice",
             "queue_id": queue_id,
             "duration_seconds": duration,
