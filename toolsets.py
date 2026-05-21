@@ -46,7 +46,19 @@ _HERMES_CORE_TOOLS = [
     # to shell/curl. Each tool's own ``check_fn`` still gates schema
     # exposure when its provider key is missing.
     "vision_analyze", "image_generate",
+    "video_generate",
+    "audio_generate",
     "image_edit", "image_compose", "image_upscale", "image_remove_background",
+    # Venice extras (tools/venice_extras_tool.py): image style presets,
+    # document/text parser, voice cloning, YouTube transcription, and music/video
+    # cost quotes. Same subset-check reasoning as the image tools above — must be
+    # listed here so their toolsets stay a subset of the platform composite.
+    "image_styles", "text_parser", "video_transcribe", "voice_clone",
+    "audio_quote", "video_quote",
+    # On-chain reads (tools/venice_extras_tool.py): read-only JSON-RPC via
+    # Venice's crypto proxy. Same subset-check reasoning as above — listed
+    # here so the ``crypto`` toolset stays a subset of the platform composite.
+    "crypto_rpc",
     # Multimodal config tool (model picker per modality). Registered under
     # ``toolset="config"`` — needs to be in core so the resolver's recovery
     # loop treats the toolset as a subset of the platform composite.
@@ -66,6 +78,7 @@ _HERMES_CORE_TOOLS = [
     # listing it here the ``memory`` toolset disappears from the LLM's tool
     # list at runtime once embed_tool is imported.
     "todo", "memory", "text_embed",
+    "venice_characters",
     # Session history search
     "session_search",
     # Clarifying questions
@@ -109,7 +122,7 @@ TOOLSETS = {
     # Basic toolsets - individual tool categories
     "web": {
         "description": "Web research and content extraction tools",
-        "tools": ["web_search", "web_extract"],
+        "tools": ["web_search", "web_extract", "text_parser", "video_transcribe"],
         "includes": []  # No other toolsets included
     },
     
@@ -144,18 +157,18 @@ TOOLSETS = {
     
     "image_gen": {
         "description": "Creative generation tools (images)",
-        "tools": ["image_generate"],
+        "tools": ["image_generate", "image_styles"],
         "includes": []
     },
 
     "video_gen": {
         "description": (
-            "Video generation tools. Single ``video_generate`` tool covers "
-            "text-to-video (prompt only) and image-to-video (prompt + "
-            "image_url) — the active backend auto-routes. Configure via "
-            "``hermes tools`` → Video Generation."
+            "Video + audio generation. ``video_generate`` covers text-to-video "
+            "(prompt only) and image-to-video (prompt + image_url); "
+            "``audio_generate`` generates music and sound effects (Venice). The "
+            "active backend auto-routes. Configure via ``hermes tools`` → Video Generation."
         ),
-        "tools": ["video_generate"],
+        "tools": ["video_generate", "audio_generate", "audio_quote", "video_quote"],
         "includes": []
     },
 
@@ -166,6 +179,16 @@ TOOLSETS = {
             "or keyboard focus. Works with any tool-capable model."
         ),
         "tools": ["computer_use"],
+        "includes": []
+    },
+
+    "crypto": {
+        "description": (
+            "Read-only on-chain data via Venice's crypto JSON-RPC proxy "
+            "(EVM chains + more): balances, blocks, logs, eth_call, gas. "
+            "Signing/sending is disabled (no wallet). Uses VENICE_API_KEY."
+        ),
+        "tools": ["crypto_rpc"],
         "includes": []
     },
 
@@ -244,7 +267,7 @@ TOOLSETS = {
     
     "tts": {
         "description": "Text-to-speech: convert text to audio with Edge TTS (free), ElevenLabs, OpenAI, or xAI",
-        "tools": ["text_to_speech"],
+        "tools": ["text_to_speech", "voice_clone"],
         "includes": []
     },
     

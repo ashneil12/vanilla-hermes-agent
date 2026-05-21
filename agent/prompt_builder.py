@@ -185,6 +185,19 @@ SKILLS_GUIDANCE = (
     "Skills that aren't maintained become liabilities."
 )
 
+MEDIA_GENERATION_GUIDANCE = (
+    "# Media generation\n"
+    "To create images, video, music, audio, songs, jingles, ambient tracks, or "
+    "sound effects, you MUST use the dedicated cloud generation tools in your "
+    "toolset — image_generate, video_generate, and audio_generate. They are "
+    "hosted (no local setup) and return a ready media file. Do NOT write code, "
+    "run the terminal, install packages (torch, audiocraft, MusicGen, ffmpeg, "
+    "scipy, soundfile, …), or open the audiocraft / heartmula / songwriting "
+    "skills to synthesize media yourself — that path is slower, lower quality, "
+    "and usually fails here. Example: for \"generate some background music\" or "
+    "\"make a 10s track\", call audio_generate directly with the prompt."
+)
+
 KANBAN_GUIDANCE = (
     "# Kanban task execution protocol\n"
     "You have been assigned ONE task from "

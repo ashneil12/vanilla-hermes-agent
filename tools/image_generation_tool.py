@@ -981,6 +981,26 @@ def _read_configured_image_model():
     return None
 
 
+def _read_configured_image_style():
+    """Return the value of ``image_gen.style_preset`` from config.yaml, or None.
+
+    Set via the WebUI Settings → Media "Style" dropdown (which lists the
+    presets from Venice ``/image/styles``). Only the Venice image provider
+    consumes ``style_preset`` today; other providers ignore the kwarg.
+    """
+    try:
+        from hermes_cli.config import load_config
+        cfg = load_config()
+        section = cfg.get("image_gen") if isinstance(cfg, dict) else None
+        if isinstance(section, dict):
+            value = section.get("style_preset")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    except Exception as exc:
+        logger.debug("Could not read image_gen.style_preset: %s", exc)
+    return None
+
+
 def _read_configured_image_provider():
     """Return the value of ``image_gen.provider`` from config.yaml, or None.
 
@@ -1014,8 +1034,25 @@ def _dispatch_to_plugin_provider(prompt: str, aspect_ratio: str):
     that matches a registered plugin provider wins.
     """
     configured = _read_configured_image_provider()
-    if not configured or configured == "fal":
+    if configured == "fal":
         return None
+    if not configured:
+        # No explicit image_gen.provider: auto-pair with the active provider
+        # (e.g. venice when VENICE_API_KEY is set), mirroring video_gen.
+        try:
+            from agent.image_gen_registry import get_active_provider
+            from hermes_cli.plugins import _ensure_plugins_discovered
+            _ensure_plugins_discovered()
+            _ap = get_active_provider()
+            if _ap is None:
+                _ensure_plugins_discovered(force=True)
+                _ap = get_active_provider()
+        except Exception as exc:
+            logger.debug("image_gen auto-pair skipped: %s", exc)
+            _ap = None
+        if _ap is None or getattr(_ap, "name", None) == "fal":
+            return None
+        configured = _ap.name
 
     # Also read configured model so we can pass it to the plugin
     configured_model = _read_configured_image_model()
@@ -1054,10 +1091,16 @@ def _dispatch_to_plugin_provider(prompt: str, aspect_ratio: str):
             "error_type": "provider_not_registered",
         })
 
+    # Also read a configured style preset so the WebUI's Media "Style"
+    # dropdown becomes a live default (the Venice provider honors it).
+    configured_style = _read_configured_image_style()
+
     try:
         kwargs = {"prompt": prompt, "aspect_ratio": aspect_ratio}
         if configured_model:
             kwargs["model"] = configured_model
+        if configured_style:
+            kwargs["style_preset"] = configured_style
         result = provider.generate(**kwargs)
     except Exception as exc:
         logger.warning(

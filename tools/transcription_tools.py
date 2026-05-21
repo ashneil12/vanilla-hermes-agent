@@ -197,12 +197,40 @@ def _normalize_local_command_model(model_name: Optional[str]) -> str:
     return _normalize_local_model(model_name)
 
 
+def _auto_detect_cloud_stt() -> str:
+    """First available cloud STT provider by key presence.
+
+    Order: groq (free tier) > openai > venice > xai. Returns ``"none"`` when no
+    cloud key is configured. Used both for auto-detect and as a graceful
+    fallback when a configured local backend (faster-whisper / whisper binary)
+    isn't installed — so voice transcription still works (e.g. Telegram voice
+    messages) instead of silently failing.
+    """
+    if _HAS_OPENAI and get_env_value("GROQ_API_KEY"):
+        return "groq"
+    if _HAS_OPENAI and _has_openai_audio_backend():
+        return "openai"
+    if os.environ.get("VENICE_API_KEY", "").strip():
+        return "venice"
+    try:
+        from tools.xai_http import resolve_xai_http_credentials
+
+        if resolve_xai_http_credentials().get("api_key"):
+            return "xai"
+    except Exception:
+        pass
+    return "none"
+
+
 def _get_provider(stt_config: dict) -> str:
     """Determine which STT provider to use.
 
-    When ``stt.provider`` is explicitly set in config, that choice is
-    honoured — no silent cloud fallback.  When no provider is configured,
-    auto-detect tries: local > groq (free) > openai (paid).
+    When ``stt.provider`` is explicitly set, that choice is authoritative and is
+    never silently swapped for a different cloud provider (GH-1774): an explicit
+    *local* choice without a local backend resolves to ``none`` rather than a
+    cloud key. When no provider is configured, auto-detect tries:
+    local > groq (free) > openai > venice > xai, so out-of-the-box voice still
+    works on instances that only have a cloud key like Venice.
     """
     if not is_stt_enabled(stt_config):
         return "none"
@@ -218,6 +246,10 @@ def _get_provider(stt_config: dict) -> str:
                 return "local"
             if _has_local_command():
                 return "local_command"
+            # GH-1774: an explicit `local` choice is authoritative — never
+            # silently swap in a cloud provider (the user opted into on-device
+            # transcription for privacy/cost). Auto mode (no provider set) still
+            # picks an available cloud provider, including Venice.
             logger.warning(
                 "STT provider 'local' configured but unavailable "
                 "(install faster-whisper or set HERMES_LOCAL_STT_COMMAND)"
@@ -295,24 +327,10 @@ def _get_provider(stt_config: dict) -> str:
         return "local"
     if _has_local_command():
         return "local_command"
-    if _HAS_OPENAI and get_env_value("GROQ_API_KEY"):
-        logger.info("No local STT available, using Groq Whisper API")
-        return "groq"
-    if _HAS_OPENAI and _has_openai_audio_backend():
-        logger.info("No local STT available, using OpenAI Whisper API")
-        return "openai"
-    if os.environ.get("VENICE_API_KEY", "").strip():
-        logger.info("No local STT available, using Venice STT API")
-        return "venice"
-    try:
-        from tools.xai_http import resolve_xai_http_credentials
-
-        if resolve_xai_http_credentials().get("api_key"):
-            logger.info("No local STT available, using xAI Grok STT API")
-            return "xai"
-    except Exception:
-        pass
-    return "none"
+    _cloud = _auto_detect_cloud_stt()
+    if _cloud != "none":
+        logger.info("No local STT available, using %s STT API", _cloud)
+    return _cloud
 
 # ---------------------------------------------------------------------------
 # Shared validation
@@ -824,7 +842,9 @@ def _transcribe_xai(file_path: str, model_name: str) -> Dict[str, Any]:
 
 
 DEFAULT_VENICE_STT_BASE_URL = "https://api.venice.ai/api/v1"
-DEFAULT_VENICE_STT_MODEL = "whisper-1"
+# Venice's transcription model id (NOT OpenAI's "whisper-1", which 404s on Venice
+# with: 'Did you mean: openai/whisper-large-v3?'). Overridable via stt.venice.model.
+DEFAULT_VENICE_STT_MODEL = "openai/whisper-large-v3"
 
 
 def _transcribe_venice(file_path: str, model_name: str) -> Dict[str, Any]:
