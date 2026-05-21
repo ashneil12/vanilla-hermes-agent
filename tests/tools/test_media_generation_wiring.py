@@ -172,6 +172,67 @@ class TestVideoModelResolution:
         assert vv._resolve_concrete_model("veo-3.1", "image-to-video") == "veo-3.1"
 
 
+class TestVeniceVideoPayload:
+    """Submit payload must omit aspect_ratio for image/reference-to-video.
+
+    Venice 400s ('This model does not support aspect_ratio') when an image or
+    reference frame is supplied, because the output frame is derived from the
+    source. Pure text-to-video keeps aspect_ratio.
+    """
+
+    def _provider_capturing(self, monkeypatch):
+        import plugins.video_gen.venice as vv
+
+        captured: dict = {}
+
+        async def fake_submit(client, payload, *, api_key, base_url):
+            captured["payload"] = dict(payload)
+            return "queue-test-1"
+
+        async def fake_poll(client, queue_id, *, api_key, base_url, timeout_seconds, poll_interval):
+            return {"status": "done", "body": {"download_url": "https://x/v.mp4", "model": "m"}}
+
+        monkeypatch.setattr(vv, "_resolve_credentials", lambda: ("test-key", "https://api.venice.ai/api/v1"))
+        monkeypatch.setattr(
+            vv, "_resolve_concrete_model",
+            lambda family, mode: f"seedance-2-0-{mode}",
+        )
+        monkeypatch.setattr(vv, "_submit_job", fake_submit)
+        monkeypatch.setattr(vv, "_poll_job", fake_poll)
+        return vv.VeniceVideoGenProvider(), captured
+
+    def test_text_to_video_keeps_aspect_ratio(self, monkeypatch):
+        provider, captured = self._provider_capturing(monkeypatch)
+        res = provider.generate("a neon city", aspect_ratio="16:9")
+        assert res.get("success") is True, res
+        assert captured["payload"].get("aspect_ratio") == "16:9"
+        assert "image_url" not in captured["payload"]
+
+    def test_image_to_video_omits_aspect_ratio(self, monkeypatch):
+        provider, captured = self._provider_capturing(monkeypatch)
+        res = provider.generate(
+            "make it move",
+            image_url="data:image/png;base64,AAAA",
+            aspect_ratio="16:9",
+        )
+        assert res.get("success") is True, res
+        assert "aspect_ratio" not in captured["payload"], (
+            "image-to-video must NOT send aspect_ratio (Venice rejects it)"
+        )
+        assert captured["payload"].get("image_url") == "data:image/png;base64,AAAA"
+
+    def test_reference_to_video_omits_aspect_ratio(self, monkeypatch):
+        provider, captured = self._provider_capturing(monkeypatch)
+        res = provider.generate(
+            "blend these",
+            reference_image_urls=["https://x/a.png"],
+            aspect_ratio="9:16",
+        )
+        assert res.get("success") is True, res
+        assert "aspect_ratio" not in captured["payload"]
+        assert captured["payload"].get("reference_image_urls") == ["https://x/a.png"]
+
+
 class TestMediaConfigHonoring:
     """Guard the Settings → Media controls against becoming dead controls:
     the agent generators must read the config defaults the WebUI persists."""
