@@ -137,6 +137,110 @@ def _resolve_model(call_override: Optional[str]) -> str:
     return DEFAULT_MODEL
 
 
+# ---------------------------------------------------------------------------
+# Dynamic mode-aware model resolution
+# ---------------------------------------------------------------------------
+# Newer Venice video FAMILIES encode the generation MODE in the model id
+# (seedance-2-0-text-to-video / -image-to-video / -reference-to-video,
+# wan-2-7-video-to-video, …). The user picks a FAMILY (or Auto) in the WebUI;
+# we derive the mode from the request inputs and resolve the concrete variant —
+# so the agent never has to name an exact model and a pinned family works for
+# EVERY mode. Older single-id families (Veo/Kling) carry all modes in the
+# payload, so they resolve to themselves and the image_url switch still applies.
+_MODE_SUFFIXES = ("reference-to-video", "image-to-video", "text-to-video", "video-to-video")
+_MODE_FALLBACK = {
+    "text-to-video": ("text-to-video",),
+    "image-to-video": ("image-to-video", "reference-to-video"),
+    "reference-to-video": ("reference-to-video", "image-to-video"),
+    "video-to-video": ("video-to-video",),
+}
+_CATALOG_CACHE: Dict[str, Any] = {"ts": 0.0, "ids": []}
+_CATALOG_TTL_SECONDS = 300
+
+
+def _detect_mode(
+    *,
+    image_url: Optional[str],
+    reference_images: Optional[List[str]],
+    video_url: Optional[str] = None,
+) -> str:
+    if video_url:
+        return "video-to-video"
+    if reference_images:
+        return "reference-to-video"
+    if image_url:
+        return "image-to-video"
+    return "text-to-video"
+
+
+def _strip_mode_suffix(model_id: str) -> str:
+    for suf in _MODE_SUFFIXES:
+        if model_id.endswith("-" + suf):
+            return model_id[: -(len(suf) + 1)]
+    return model_id
+
+
+def _video_model_ids() -> List[str]:
+    """Live video model ids from ``GET /models?type=video`` (5-min cached, best-effort)."""
+    import time
+
+    now = time.time()
+    cached = _CATALOG_CACHE.get("ids") or []
+    if cached and (now - float(_CATALOG_CACHE.get("ts") or 0)) < _CATALOG_TTL_SECONDS:
+        return cached
+    api_key, base_url = _resolve_credentials()
+    if not api_key:
+        return cached
+    try:
+        resp = httpx.get(
+            f"{base_url}/models?type=video",
+            headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
+            timeout=8,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        items = data.get("data") if isinstance(data, dict) else data
+        ids = [str(m["id"]) for m in (items or []) if isinstance(m, dict) and m.get("id")]
+        if ids:
+            _CATALOG_CACHE["ts"] = now
+            _CATALOG_CACHE["ids"] = ids
+            return ids
+    except Exception:
+        logger.debug("video model catalog fetch failed", exc_info=True)
+    return cached
+
+
+def _resolve_concrete_model(family_or_id: str, mode: str) -> str:
+    """Map a family preference (or full id) + detected mode → a concrete model id.
+
+    Split families resolve to ``<family>-<mode>`` (with a sensible mode-fallback
+    when a family lacks the exact variant); single-id families (Veo/Kling)
+    resolve to themselves and rely on the payload's image_url switch.
+    """
+    family_or_id = (family_or_id or "").strip()
+    if not family_or_id:
+        return DEFAULT_MODEL
+    stem = _strip_mode_suffix(family_or_id)
+    catalog = _video_model_ids()
+    if catalog:
+        for cand_suf in _MODE_FALLBACK.get(mode, (mode,)):
+            cand = f"{stem}-{cand_suf}"
+            if cand in catalog:
+                return cand
+        if family_or_id in catalog:
+            return family_or_id
+        if stem in catalog:
+            return stem
+        fam = sorted(m for m in catalog if m.startswith(stem + "-"))
+        if fam:
+            return fam[0]
+        return family_or_id
+    # Offline / no catalog: if it already carried a mode suffix, swap it; else verbatim.
+    if stem != family_or_id:
+        return f"{stem}-{mode}"
+    return family_or_id
+
+
 def _resolve_credentials() -> Tuple[str, str]:
     api_key = os.environ.get("VENICE_API_KEY", "").strip()
     return api_key, _resolve_base_url()
@@ -372,7 +476,12 @@ class VeniceVideoGenProvider(VideoGenProvider):
         if normalized_resolution not in VALID_RESOLUTIONS:
             normalized_resolution = DEFAULT_RESOLUTION
 
-        model_id = _resolve_model(model)
+        # Derive the generation mode from the inputs and resolve the concrete
+        # model variant for the user's chosen family (or Auto). The agent only
+        # has to supply prompt + optional image_url/reference images — the right
+        # seedance/wan/… variant (text/image/reference-to-video) is picked here.
+        mode = _detect_mode(image_url=image_url_norm, reference_images=refs)
+        model_id = _resolve_concrete_model(_resolve_model(model), mode)
 
         payload: Dict[str, Any] = {
             "model": model_id,
