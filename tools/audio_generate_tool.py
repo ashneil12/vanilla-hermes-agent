@@ -261,10 +261,15 @@ def audio_generate_tool(
 AUDIO_GENERATE_SCHEMA = {
     "name": "audio_generate",
     "description": (
-        "Generate music, sound effects, or vocalized audio from a text "
-        "prompt via Venice. Different from text_to_speech (which reads "
-        "provided text aloud) — this tool creates new audio content "
-        "from a creative description. Returns a URL or saved file path."
+        "Generate real music, background music, songs, jingles, ambient "
+        "tracks, or sound effects (SFX) from a text prompt — cloud-rendered "
+        "via Venice (elevenlabs-music), nothing to install. THIS is the tool "
+        "to use for ANY request to make/generate music, a soundtrack, "
+        "background/bg music, a beat, or sound effects. Always prefer it over "
+        "writing code, running the terminal, or the audiocraft / MusicGen / "
+        "songwriting skills — those are unnecessary and lower quality here. "
+        "(Different from text_to_speech, which only reads provided text "
+        "aloud.) Returns the saved .mp3 file path."
     ),
     "parameters": {
         "type": "object",
