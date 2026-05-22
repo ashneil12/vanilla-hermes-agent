@@ -222,6 +222,26 @@ def _auto_detect_cloud_stt() -> str:
     return "none"
 
 
+def _try_lazy_install_stt() -> bool:
+    """Attempt to lazy-install faster-whisper and return True on success.
+
+    The module-level ``_HAS_FASTER_WHISPER`` flag is set at import time and
+    cached. If the package wasn't installed at startup, calling ``ensure()``
+    installs it. This function re-checks dynamically after installation so
+    the provider can use it immediately without a process restart.
+    """
+    try:
+        from tools.lazy_deps import ensure
+        ensure("stt.faster_whisper")
+        # Re-check dynamically after install
+        import importlib.util as _iu
+        if _iu.find_spec("faster_whisper"):
+            return True
+    except Exception as exc:
+        logger.debug("Lazy install of faster-whisper failed: %s", exc)
+    return False
+
+
 def _get_provider(stt_config: dict) -> str:
     """Determine which STT provider to use.
 
@@ -246,6 +266,10 @@ def _get_provider(stt_config: dict) -> str:
                 return "local"
             if _has_local_command():
                 return "local_command"
+            # Try lazy-install before giving up (upstream): an explicit local
+            # choice can self-heal if faster-whisper installs on demand.
+            if _try_lazy_install_stt():
+                return "local"
             # GH-1774: an explicit `local` choice is authoritative — never
             # silently swap in a cloud provider (the user opted into on-device
             # transcription for privacy/cost). Auto mode (no provider set) still
@@ -327,6 +351,9 @@ def _get_provider(stt_config: dict) -> str:
         return "local"
     if _has_local_command():
         return "local_command"
+    # Try lazy-install before falling through to cloud providers (upstream):
+    if _try_lazy_install_stt():
+        return "local"
     _cloud = _auto_detect_cloud_stt()
     if _cloud != "none":
         logger.info("No local STT available, using %s STT API", _cloud)
@@ -434,7 +461,8 @@ def _transcribe_local(file_path: str, model_name: str) -> Dict[str, Any]:
     global _local_model, _local_model_name
 
     if not _HAS_FASTER_WHISPER:
-        return {"success": False, "transcript": "", "error": "faster-whisper not installed"}
+        if not _try_lazy_install_stt():
+            return {"success": False, "transcript": "", "error": "faster-whisper not installed"}
 
     try:
         # Lazy-load the model (downloads on first use, ~150 MB for 'base')
