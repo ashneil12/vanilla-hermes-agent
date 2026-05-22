@@ -36,7 +36,83 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_VENICE_BASE_URL = "https://api.venice.ai/api/v1"
-DEFAULT_EDIT_MODEL = "firered-image-edit"
+
+# Venice's own /image/edit default is ``firered-image-edit`` — a weak editor
+# that frequently drifts from the source (the "it edited it into a different
+# image" failure). The modern multimodal editors (seedream / nano-banana /
+# qwen / gpt-image) preserve composition far better. We default edits to the
+# SAME family the user picked for *generation* (e.g. nano-banana-2 ->
+# nano-banana-2-edit) so an edit looks like the image it came from, and fall
+# back to a strong general editor when there's no usable mapping.
+STRONG_DEFAULT_EDIT_MODEL = "seedream-v4-edit"
+# Back-compat alias (older tests / callers referenced DEFAULT_EDIT_MODEL).
+DEFAULT_EDIT_MODEL = STRONG_DEFAULT_EDIT_MODEL
+
+# Known Venice /image/edit model ids (2026-05). Used to validate a derived
+# "<gen-model>-edit" variant before we send it.
+_EDIT_MODELS = {
+    "firered-image-edit", "qwen-edit", "grok-imagine-edit",
+    "grok-imagine-quality-edit", "qwen-image-2-edit", "qwen-image-2-pro-edit",
+    "wan-2-7-pro-edit", "flux-2-max-edit", "gpt-image-2-edit",
+    "gpt-image-1-5-edit", "nano-banana-2-edit", "nano-banana-pro-edit",
+    "seedream-v5-lite-edit", "seedream-v4-edit",
+}
+
+# Generation model -> edit model where the name doesn't simply take a "-edit"
+# suffix.
+_GEN_TO_EDIT_SPECIAL = {
+    "grok-imagine-image": "grok-imagine-edit",
+    "wan-2-7-text-to-image": "wan-2-7-pro-edit",
+    "flux-2-pro": "flux-2-max-edit",
+}
+
+
+def _read_configured_image_model() -> str:
+    """Best-effort read of the user's configured Venice image-generation model.
+
+    Order mirrors the venice image_gen plugin: ``VENICE_IMAGE_MODEL`` env →
+    ``image_gen.venice.model`` → ``image_gen.model``.
+    """
+    env = os.environ.get("VENICE_IMAGE_MODEL", "").strip()
+    if env:
+        return env
+    try:
+        from hermes_cli.config import load_config
+
+        cfg = load_config()
+        ig = cfg.get("image_gen") if isinstance(cfg, dict) else None
+        if isinstance(ig, dict):
+            ven = ig.get("venice")
+            if isinstance(ven, dict) and isinstance(ven.get("model"), str) and ven["model"].strip():
+                return ven["model"].strip()
+            if isinstance(ig.get("model"), str) and ig["model"].strip():
+                return ig["model"].strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _resolve_edit_model(call_override: Optional[str]) -> str:
+    """Choose the edit model.
+
+    Precedence: explicit ``model=`` arg > the configured generation model's
+    edit variant (so edits match what the user generates with) > a strong
+    general default. Never silently falls back to the weak firered default.
+    """
+    cand = (call_override or "").strip()
+    if cand:
+        return cand
+    gen = _read_configured_image_model()
+    if gen:
+        if gen in _EDIT_MODELS or gen.endswith("-edit"):
+            return gen
+        suffixed = f"{gen}-edit"
+        if suffixed in _EDIT_MODELS:
+            return suffixed
+        special = _GEN_TO_EDIT_SPECIAL.get(gen)
+        if special:
+            return special
+    return STRONG_DEFAULT_EDIT_MODEL
 
 
 def _resolve_credentials() -> Tuple[str, str]:
@@ -513,13 +589,19 @@ def image_edit_tool(
         return _error(f"Could not read image: {exc}", tool="image_edit", error_type="bad_input")
     image_bytes, image_name = _prepare_upload_bytes(image_bytes, image_name, base_url)
 
-    chosen_model = (model or DEFAULT_EDIT_MODEL).strip() or DEFAULT_EDIT_MODEL
+    chosen_model = _resolve_edit_model(model)
 
     data: Dict[str, str] = {
         "model": chosen_model,
         "prompt": prompt.strip()[:32_000],
-        "aspect_ratio": (aspect_ratio or "auto").strip() or "auto",
     }
+    # "auto" tells Venice to keep the source frame — which is what we want for
+    # an identity-preserving edit — but not every model accepts the literal
+    # "auto" value (qwen-image-2-edit 400s on it). So only send a *concrete*
+    # ratio; omitting it lets the model preserve the source aspect.
+    requested_ar = (aspect_ratio or "auto").strip()
+    if requested_ar and requested_ar.lower() != "auto":
+        data["aspect_ratio"] = requested_ar
     if isinstance(resolution, str) and resolution.strip():
         data["resolution"] = resolution.strip()
     if isinstance(output_format, str) and output_format.strip():
@@ -551,16 +633,24 @@ def image_edit_tool(
         str(saved),
         tool="image_edit",
         model=chosen_model,
-        extra={"aspect_ratio": data["aspect_ratio"]},
+        extra={"aspect_ratio": data.get("aspect_ratio", "auto")},
     )
 
 
 IMAGE_EDIT_SCHEMA = {
     "name": "image_edit",
     "description": (
-        "Edit, inpaint, or restyle an existing image guided by a text prompt. "
-        "Use for 'make the sky purple', 'replace the background with a forest', "
-        "'change the person's hair color', etc. Returns the saved edited image."
+        "Edit / transform an EXISTING image while preserving it — the source "
+        "image is used as a reference and only what you ask for changes. This is "
+        "reference-conditioned generation: pass the prior image plus an "
+        "instruction. Use it whenever the user wants to modify an image they "
+        "already have: 'move the subject to the right', 'make the sky purple', "
+        "'replace the background', 'change the hair color', 'remove the person', "
+        "'add a hat'. ALWAYS prefer this over image_generate for changes to an "
+        "existing image — regenerating from a text prompt produces a DIFFERENT "
+        "image and loses the original composition. Defaults to a strong "
+        "identity-preserving model matched to your generation model. Returns the "
+        "saved edited image."
     ),
     "parameters": {
         "type": "object",
@@ -670,14 +760,16 @@ def image_compose_tool(
             data_bytes = _shrink_image_bytes(data_bytes, per_image_raw_budget)
         encoded.append(base64.b64encode(data_bytes).decode("ascii"))
 
-    chosen_model = (model or DEFAULT_EDIT_MODEL).strip() or DEFAULT_EDIT_MODEL
+    chosen_model = _resolve_edit_model(model)
 
     payload: Dict[str, Any] = {
         "modelId": chosen_model,
         "prompt": prompt.strip()[:32_000],
         "images": encoded,
-        "aspect_ratio": (aspect_ratio or "auto").strip() or "auto",
     }
+    requested_ar = (aspect_ratio or "auto").strip()
+    if requested_ar and requested_ar.lower() != "auto":
+        payload["aspect_ratio"] = requested_ar
     if isinstance(resolution, str) and resolution.strip():
         payload["resolution"] = resolution.strip()
     if isinstance(output_format, str) and output_format.strip():
@@ -716,7 +808,7 @@ def image_compose_tool(
         str(saved),
         tool="image_compose",
         model=chosen_model,
-        extra={"image_count": len(encoded), "aspect_ratio": payload["aspect_ratio"]},
+        extra={"image_count": len(encoded), "aspect_ratio": payload.get("aspect_ratio", "auto")},
     )
 
 
