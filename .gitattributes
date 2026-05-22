@@ -1,2 +1,6 @@
 # Auto-generated files — collapse diffs and exclude from language stats
 web/package-lock.json linguist-generated=true
+
+# Fork-owned CI build pipeline — never auto-combine on upstream/prod merges.
+# (Requires `git config merge.ours.driver true` locally to take effect.)
+.github/workflows/docker-publish.yml merge=ours
