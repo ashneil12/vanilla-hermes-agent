@@ -17,9 +17,9 @@ on:
 permissions:
   contents: read
 
-# Main-branch builds publish the image used by the Proxmox VM fleet. Prefer the
-# newest main build over preserving older in-flight runs; otherwise a slow arm64
-# build can hold :stable back from the commit we are trying to bake.
+# Main-branch builds publish the image used by the Proxmox VM fleet (amd64-only).
+# Prefer the newest main build over preserving older in-flight runs so a slow
+# build can't hold :stable back from the commit we are trying to bake.
 concurrency:
   group: docker-${{ github.ref }}
   cancel-in-progress: true
@@ -122,7 +122,7 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: echo "pushed=true" >> "$GITHUB_OUTPUT"
 
-      - name: Push multi-arch image (release)
+      - name: Push image (release, amd64-only)
         if: github.event_name == 'release'
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
         with:
@@ -130,7 +130,9 @@ jobs:
           file: Dockerfile
           push: true
           provenance: false
-          platforms: linux/amd64,linux/arm64
+          # hermes-fork: amd64-only. The fleet is all amd64 (Hetzner Ryzen);
+          # arm64 is unused and just slows the release build.
+          platforms: linux/amd64
           tags: |
             ghcr.io/ashneil12/vanilla-hermes-agent:latest
             ghcr.io/ashneil12/vanilla-hermes-agent:stable
