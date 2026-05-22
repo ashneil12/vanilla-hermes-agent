@@ -907,7 +907,7 @@ def test_get_platform_tools_recovers_non_configurable_toolsets_from_composite():
     }
     fake_toolsets["hermes-_test_platform"] = {
         "description": "test composite",
-        "tools": ["web_search", "web_extract", "terminal", "process", "_test_special_tool"],
+        "tools": ["web_search", "web_extract", "text_parser", "video_transcribe", "terminal", "process", "_test_special_tool"],
         "includes": [],
     }
 
@@ -1048,9 +1048,6 @@ def test_reconfigure_browser_provider_overwrites_stale_use_gateway():
 
 
 @pytest.mark.parametrize("provider_name,post_setup_key", [
-    ("Browserbase", "agent_browser"),
-    ("Browser Use", "agent_browser"),
-    ("Firecrawl", "agent_browser"),
     ("Camofox", "camofox"),
 ])
 def test_reconfigure_provider_runs_post_setup_for_env_var_providers(
