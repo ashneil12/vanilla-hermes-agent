@@ -945,7 +945,13 @@ IMAGE_GENERATE_SCHEMA = {
         "value VERBATIM (full path, no trimming) — the MEDIA: prefix is "
         "what tells the chat UI to fetch and inline-render the image. "
         "Without `MEDIA:` (or without the `![]()` wrapper), the path "
-        "renders as broken markdown text instead of an image."
+        "renders as broken markdown text instead of an image. "
+        "You can also pass `reference_images` to generate FROM an existing "
+        "image (reference-conditioned generation) — give the prior image(s) "
+        "plus a prompt and the original is preserved while your changes are "
+        "applied. This is the right way to iterate on an image you just made "
+        "('now make it nighttime', 'move the subject right', 'add a hat'); it "
+        "routes to the strong edit model and keeps the composition."
     ),
     "parameters": {
         "type": "object",
@@ -959,6 +965,18 @@ IMAGE_GENERATE_SCHEMA = {
                 "enum": list(VALID_ASPECT_RATIOS),
                 "description": "The aspect ratio of the generated image. 'landscape' is 16:9 wide, 'portrait' is 16:9 tall, 'square' is 1:1.",
                 "default": DEFAULT_ASPECT_RATIO,
+            },
+            "reference_images": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Optional. 1-3 source images to condition on (file path, "
+                    "HTTPS URL, or base64). When provided, the prior image is "
+                    "preserved and only your prompt's changes are applied "
+                    "(reference-conditioned generation / edit). Use this to "
+                    "modify an existing image instead of producing an unrelated "
+                    "new one."
+                ),
             },
         },
         "required": ["prompt"],
@@ -1128,6 +1146,27 @@ def _handle_image_generate(args, **kw):
     if not prompt:
         return tool_error("prompt is required for image generation")
     aspect_ratio = args.get("aspect_ratio", DEFAULT_ASPECT_RATIO)
+
+    # Reference-conditioned generation: when source image(s) are supplied this
+    # is really an EDIT — route to the Venice edit path (strong, identity-
+    # preserving model) so the original is kept instead of producing an
+    # unrelated new image. Accepts ``reference_images`` (list) or the singular
+    # ``reference_image``.
+    refs = args.get("reference_images")
+    if refs is None:
+        refs = args.get("reference_image")
+    if isinstance(refs, str):
+        refs = [refs]
+    if isinstance(refs, list):
+        clean = [r for r in refs if isinstance(r, str) and r.strip()]
+        if clean:
+            try:
+                from tools.image_edit_tool import image_edit_tool, image_compose_tool
+            except Exception as exc:  # pragma: no cover - import guard
+                return tool_error(f"reference-image generation unavailable: {exc}")
+            if len(clean) == 1:
+                return image_edit_tool(image=clean[0], prompt=prompt, aspect_ratio=aspect_ratio)
+            return image_compose_tool(images=clean[:3], prompt=prompt, aspect_ratio=aspect_ratio)
 
     # Route to a plugin-registered provider if one is active (and it's
     # not the in-tree FAL path).
