@@ -92,17 +92,6 @@ jobs:
             ghcr.io/ashneil12/vanilla-hermes-agent-canary:test \
             -lc 'cd /opt/hermes && /opt/hermes/.venv/bin/python3 -m pytest tests/tools/test_media_generation_wiring.py -q'
 
-      # Regression gate: media (image/video/audio) tool wiring must be intact in
-      # the freshly built image BEFORE we publish :stable. If an upstream-sync
-      # rebase or refactor drops a fix (handler signature, toolset membership,
-      # Venice retrieve endpoint, steering guidance), this fails the job and the
-      # SHA/:stable push steps are skipped — the fleet keeps the last good image.
-      - name: Media tool wiring regression gate
-        run: |
-          docker run --rm \
-            --entrypoint sh \
-            ghcr.io/ashneil12/vanilla-hermes-agent:test \
-            -lc 'cd /opt/hermes && /opt/hermes/.venv/bin/python3 -m pytest tests/tools/test_media_generation_wiring.py -q'
 
       - name: Log in to GitHub Container Registry
         if: >-
