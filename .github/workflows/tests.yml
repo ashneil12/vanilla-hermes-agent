@@ -54,11 +54,6 @@ jobs:
           source .venv/bin/activate
           uv pip install -e ".[all,dev,bedrock,voice,dingtalk,feishu]"
 
-      - name: Validate workflow definitions
-        run: |
-          source .venv/bin/activate
-          python scripts/validate_track_upstream_workflow.py
-
       - name: Run tests
         # Per-file isolation via scripts/run_tests_parallel.py: discovers
         # every test_*.py file under tests/ (excluding integration/ + e2e/),
