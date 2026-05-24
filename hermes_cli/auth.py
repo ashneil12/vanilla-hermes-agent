@@ -596,6 +596,13 @@ _PLACEHOLDER_SECRET_VALUES = {
     "dummy",
     "null",
     "none",
+    # Sentinel the resolver assigns to keyless/local endpoints so the OpenAI SDK
+    # accepts a non-empty api_key. It is NOT a real secret: if it ever lands in an
+    # explicit/candidate slot (e.g. propagated to self._explicit_api_key via a
+    # model switch) it must NOT preempt a real env-derived key (e.g. VENICE_API_KEY),
+    # otherwise resumed sessions send `Bearer no-key-required` and 401.
+    "no-key-required",
+    "no-key",
 }
 
 

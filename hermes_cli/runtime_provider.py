@@ -157,6 +157,19 @@ def _host_derived_api_key(base_url: str) -> str:
     return (os.getenv(env_name, "") or "").strip()
 
 
+def _base_url_is_public_host(base_url: str) -> bool:
+    """True only for a public registrable domain host (>=2 labels, last label not
+    numeric, not localhost/IP). Mirrors _host_derived_api_key's host validation so
+    OPENAI_API_KEY is used for configured CLOUD custom endpoints but NEVER leaked to
+    localhost / LAN / IP endpoints (#28660)."""
+    hostname = base_url_hostname(base_url)
+    if not hostname or hostname == "localhost" or ":" in hostname:
+        return False
+    if any(ch.isdigit() for ch in hostname.split(".")[-1]):
+        return False
+    return len([lbl for lbl in hostname.split(".") if lbl]) >= 2
+
+
 def _auto_detect_local_model(base_url: str) -> str:
     """Query a local server for its model name when only one model is loaded."""
     if not base_url:
@@ -666,6 +679,13 @@ def _resolve_named_custom_runtime(
             # who set DEEPSEEK_API_KEY / GROQ_API_KEY / MISTRAL_API_KEY get the
             # intuitive match without configuring `custom_providers` first.
             _host_derived_api_key(base_url),
+            # HermesOS deploy convention: the dashboard stores a configured custom
+            # provider's PER-INSTANCE key in OPENAI_API_KEY alongside its base_url
+            # (venice/groq/gemini/nous/xai/bankr/crof/… reach the LLM as an
+            # OpenAI-compatible "custom" provider). Use it for PUBLIC custom hosts so
+            # those endpoints resolve instead of falling to "no-key-required" (which
+            # 401s on session resume) — but NEVER for localhost/LAN/IP (#28660 leak).
+            (os.getenv("OPENAI_API_KEY", "").strip() if _base_url_is_public_host(base_url) else ""),
         ]
         api_key = next(
             (c for c in api_key_candidates if has_usable_secret(c)),
@@ -720,6 +740,10 @@ def _resolve_named_custom_runtime(
         # Bonus (#28660): derive `<VENDOR>_API_KEY` from the host as a final
         # fallback when key_env wasn't set explicitly.
         _host_derived_api_key(base_url),
+        # HermesOS deploy convention (see direct-alias path): the configured custom
+        # provider's per-instance key lives in OPENAI_API_KEY paired with base_url —
+        # for PUBLIC custom hosts only, never localhost/LAN/IP (#28660 leak).
+        (os.getenv("OPENAI_API_KEY", "").strip() if _base_url_is_public_host(base_url) else ""),
     ]
     api_key = next((candidate for candidate in api_key_candidates if has_usable_secret(candidate)), "")
 
