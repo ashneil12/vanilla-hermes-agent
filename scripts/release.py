@@ -49,6 +49,7 @@ AUTHOR_MAP = {
     # 2026-05-23 upstream sync (check-attribution flagged these).
     "ethie@nous": "ethernet8023",
     "liuhao1024@users.noreply.github.com": "liuhao1024",
+    "weichangyuwcy@gmail.com": "chyuwei",  # 2026-05-24 sync
     # teknium (multiple emails)
     "teknium1@gmail.com": "teknium1",
     "cipherframe@users.noreply.github.com": "CipherFrame",
