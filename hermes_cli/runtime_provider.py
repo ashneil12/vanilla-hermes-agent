@@ -666,6 +666,14 @@ def _resolve_named_custom_runtime(
             # who set DEEPSEEK_API_KEY / GROQ_API_KEY / MISTRAL_API_KEY get the
             # intuitive match without configuring `custom_providers` first.
             _host_derived_api_key(base_url),
+            # HermesOS deploy convention: the dashboard stores a configured custom
+            # provider's PER-INSTANCE key in OPENAI_API_KEY alongside its base_url
+            # (venice/groq/gemini/nous/xai/bankr/crof/… all reach the LLM as an
+            # OpenAI-compatible "custom" provider). Use it as the final fallback so
+            # configured custom endpoints resolve instead of falling to
+            # "no-key-required" (which 401s on session resume). This is a per-instance
+            # key paired with the configured endpoint, not a shared platform key.
+            os.getenv("OPENAI_API_KEY", "").strip(),
         ]
         api_key = next(
             (c for c in api_key_candidates if has_usable_secret(c)),
@@ -720,6 +728,9 @@ def _resolve_named_custom_runtime(
         # Bonus (#28660): derive `<VENDOR>_API_KEY` from the host as a final
         # fallback when key_env wasn't set explicitly.
         _host_derived_api_key(base_url),
+        # HermesOS deploy convention (see direct-alias path): the configured custom
+        # provider's per-instance key lives in OPENAI_API_KEY paired with base_url.
+        os.getenv("OPENAI_API_KEY", "").strip(),
     ]
     api_key = next((candidate for candidate in api_key_candidates if has_usable_secret(candidate)), "")
 

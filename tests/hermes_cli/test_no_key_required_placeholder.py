@@ -18,3 +18,19 @@ def test_no_key_sentinels_are_not_usable_secrets():
 def test_real_secret_still_usable():
     assert has_usable_secret("VENICE_INFERENCE_KEY_GvQaE5O2laUM9KfulyxiYE") is True
     assert has_usable_secret("sk-or-v1-0123456789abcdef") is True
+
+
+def test_custom_base_url_resolves_openai_api_key(monkeypatch):
+    """HermesOS stores a custom provider's per-instance key in OPENAI_API_KEY paired
+    with its base_url. Resolution must use it for a configured custom (non-openai.com)
+    endpoint instead of falling through to 'no-key-required' — which 401s on resume.
+    Covers venice/groq/gemini/nous/xai/bankr/crof/opengateway (all provider=custom).
+    """
+    from hermes_cli.runtime_provider import resolve_runtime_provider
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-hermesos-customkey-1234567890")
+    for v in ("GROQ_API_KEY", "VENICE_API_KEY", "OPENROUTER_API_KEY", "NVIDIA_API_KEY"):
+        monkeypatch.delenv(v, raising=False)
+    for base in ("https://api.groq.com/openai/v1", "https://api.venice.ai/api/v1",
+                 "https://api.x.ai/v1", "https://inference-api.nousresearch.com/v1"):
+        r = resolve_runtime_provider(requested="custom", explicit_base_url=base)
+        assert r["api_key"] == "sk-hermesos-customkey-1234567890", f"{base} -> {r['api_key']!r}"
