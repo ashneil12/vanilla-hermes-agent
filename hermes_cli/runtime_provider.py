@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -1219,6 +1219,59 @@ def _resolve_explicit_runtime(
         }
 
     return None
+
+
+def reresolve_key_if_unusable_for_public_host(
+    api_key: Any,
+    base_url: Optional[str],
+    *,
+    requested_provider: Optional[str] = None,
+    env_reloader: Optional[Callable[[], None]] = None,
+) -> Any:
+    """Recover a transiently-missing key before it reaches a public endpoint.
+
+    The gateway/CLI reload ``~/.hermes/.env`` every turn to pick up rotated
+    credentials. If a turn's reload lands while the dashboard is rewriting that
+    file, ``OPENAI_API_KEY`` is momentarily absent and resolution falls through
+    to the ``no-key-required`` placeholder. That placeholder is only ever valid
+    for keyless *local* servers — a public, key-requiring endpoint (e.g. the
+    managed-Venice proxy) rejects it with 401, which the user sees as a scary,
+    permanent "authentication failed". For a PUBLIC ``base_url`` we reload the
+    env file and re-resolve once before letting an unusable key go out.
+
+    Returns a usable key when re-resolution finds one; otherwise the original
+    value, so genuinely keyless/local endpoints and unconfigured providers keep
+    their existing behaviour (no regression).
+    """
+    if callable(api_key) and not isinstance(api_key, str):
+        # Bearer-token providers (e.g. Azure Foundry Entra ID) supply a callable
+        # the SDK invokes per request — never a missing-key situation.
+        return api_key
+    if has_usable_secret(api_key):
+        return api_key
+    if not base_url or not _base_url_is_public_host(base_url):
+        return api_key
+    if env_reloader is not None:
+        try:
+            env_reloader()
+        except Exception:
+            logger.debug("env reload during key re-resolution failed", exc_info=True)
+    try:
+        reresolved = resolve_runtime_provider(
+            requested=requested_provider,
+            explicit_base_url=base_url,
+        )
+    except Exception:
+        logger.debug("key re-resolution failed for public host", exc_info=True)
+        return api_key
+    candidate = (reresolved or {}).get("api_key")
+    if has_usable_secret(candidate):
+        logger.info(
+            "Recovered usable provider key on per-turn re-resolution for public "
+            "host — transient empty-.env window avoided"
+        )
+        return candidate
+    return api_key
 
 
 def resolve_runtime_provider(
