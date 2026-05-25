@@ -4651,18 +4651,26 @@ class HermesCLI:
 
         # Defense-in-depth: self.api_key can be poisoned with the `no-key-required`
         # sentinel via a model-switch direct-alias resolution (model_switch sets
-        # api_key="no-key-required" then `self.api_key = result.api_key`). The
-        # has_usable_secret fix stops the sentinel being *selected* during
-        # resolution, but a direct assignment bypasses that — so if the per-turn
-        # key is unusable, re-resolve from the (host-gated) env before every turn.
+        # api_key="no-key-required" then `self.api_key = result.api_key`), or be
+        # momentarily absent if a per-turn .env reload lands while the dashboard is
+        # rewriting that file. For a public/key-requiring host, reload the env and
+        # re-resolve so a transient empty key never goes out as
+        # `Bearer no-key-required` (which 401s and looks like a permanent failure).
         _eff_key = self.api_key
         try:
-            from hermes_cli.auth import has_usable_secret as _hus
-            if not _hus(_eff_key):
-                from hermes_cli.runtime_provider import resolve_runtime_provider as _rrp
-                _rr = _rrp(requested=self.requested_provider, explicit_base_url=self.base_url)
-                if _rr and _hus(_rr.get("api_key")):
-                    _eff_key = _rr["api_key"]
+            from hermes_cli.runtime_provider import (
+                reresolve_key_if_unusable_for_public_host as _reresolve_key,
+            )
+            try:
+                from hermes_cli.config import reload_env as _reload_env
+            except Exception:
+                _reload_env = None
+            _eff_key = _reresolve_key(
+                self.api_key,
+                self.base_url,
+                requested_provider=self.requested_provider,
+                env_reloader=_reload_env,
+            )
         except Exception:
             _eff_key = self.api_key
         runtime = {
