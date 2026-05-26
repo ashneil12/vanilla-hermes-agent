@@ -51,6 +51,7 @@ AUTHOR_MAP = {
     "liuhao1024@users.noreply.github.com": "liuhao1024",
     "weichangyuwcy@gmail.com": "chyuwei",  # 2026-05-24 sync
     "9592417+adam91holt@users.noreply.github.com": "adam91holt",
+    "augustine@hermesos.cloud": "ashneil12",
     "baxter@bitreserve.ai": "BaxBit",
     "glen@workmanfirearms.com": "sgtworkman",
     "jiahuigu@sjtu.edu.cn": "Jiahui-Gu",
