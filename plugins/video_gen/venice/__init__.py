@@ -1,7 +1,7 @@
 """Venice video generation backend (text-to-video + image-to-video).
 
-Surface: ``POST /video/queue`` (submit) plus ``GET /video/{id}`` (poll
-for completion). Venice exposes a curated catalog spanning Veo, Kling,
+Surface: ``POST /video/queue`` (submit) plus ``POST /video/retrieve``
+(poll with ``queue_id`` for completion). Venice exposes a curated catalog spanning Veo, Kling,
 Seedance, Wan, and others through one endpoint — the plugin abstracts
 that as ``model=`` selection with a default of ``veo-3.1`` for
 prompt-only requests and the same model for image-to-video (the
@@ -307,9 +307,10 @@ async def _poll_job(
     elapsed = 0.0
     last_status = "queued"
     while elapsed < timeout_seconds:
-        response = await client.get(
-            f"{base_url}/video/{queue_id}",
+        response = await client.post(
+            f"{base_url}/video/retrieve",
             headers=_venice_headers(api_key),
+            json={"queue_id": queue_id},
             timeout=30,
         )
         response.raise_for_status()
