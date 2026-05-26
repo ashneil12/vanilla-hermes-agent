@@ -64,7 +64,6 @@ jobs:
           sudo chown -R 10000:10000 /tmp/hermes-test
           docker run --rm \
             -v /tmp/hermes-test:/opt/data \
-            --entrypoint /opt/hermes/docker/entrypoint.sh \
             ghcr.io/ashneil12/vanilla-hermes-agent:test --help
 
       - name: Test dashboard subcommand
@@ -73,7 +72,6 @@ jobs:
           sudo chown -R 10000:10000 /tmp/hermes-test
           docker run --rm \
             -v /tmp/hermes-test:/opt/data \
-            --entrypoint /opt/hermes/docker/entrypoint.sh \
             ghcr.io/ashneil12/vanilla-hermes-agent:test dashboard --help
 
       # Regression gate: media (image/video/audio) tool wiring must be intact in
