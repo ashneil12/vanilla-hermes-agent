@@ -51,6 +51,13 @@ AUTHOR_MAP = {
     "liuhao1024@users.noreply.github.com": "liuhao1024",
     "weichangyuwcy@gmail.com": "chyuwei",  # 2026-05-24 sync
     "9592417+adam91holt@users.noreply.github.com": "adam91holt",
+    "baxter@bitreserve.ai": "BaxBit",
+    "glen@workmanfirearms.com": "sgtworkman",
+    "jiahuigu@sjtu.edu.cn": "Jiahui-Gu",
+    "jorge.fuenmayort@gmail.com": "jfuenmayor",
+    "peter.yuqin@gmail.com": "WuKongAI-CMU",
+    "roadhero@users.noreply.github.com": "roadhero",
+    "rodrigoeq@hotmail.com": "rodrigoeqnit",
     # teknium (multiple emails)
     "teknium1@gmail.com": "teknium1",
     "kenyon1977@gmail.com": "kenyonxu",
