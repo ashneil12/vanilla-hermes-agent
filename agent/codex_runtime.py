@@ -32,6 +32,48 @@ def _is_codex_stream_state_type_error(exc: TypeError) -> bool:
     return "nonetype" in text and "not iterable" in text
 
 
+def _codex_synthesized_response(
+    *,
+    model: str | None,
+    output_items: list | None = None,
+    text_parts: list | None = None,
+    log_context: str,
+):
+    """Build a minimal Responses-like object from already streamed content."""
+    if output_items:
+        logger.warning(
+            "Codex stream terminal parser failed after %d output items; "
+            "synthesizing completed response. %s",
+            len(output_items),
+            log_context,
+        )
+        output = list(output_items)
+    elif text_parts:
+        assembled = "".join(text_parts)
+        logger.warning(
+            "Codex stream terminal parser failed after %d text deltas (%d chars); "
+            "synthesizing completed response. %s",
+            len(text_parts),
+            len(assembled),
+            log_context,
+        )
+        output = [SimpleNamespace(
+            type="message",
+            role="assistant",
+            status="completed",
+            content=[SimpleNamespace(type="output_text", text=assembled)],
+        )]
+    else:
+        return None
+
+    return SimpleNamespace(
+        output=output,
+        usage=SimpleNamespace(input_tokens=0, output_tokens=0, total_tokens=0),
+        status="completed",
+        model=model,
+    )
+
+
 def run_codex_app_server_turn(
     agent,
     *,
@@ -344,6 +386,15 @@ def run_codex_stream(agent, api_kwargs: dict, client: Any = None, on_first_delta
         except TypeError as exc:
             if not _is_codex_stream_state_type_error(exc):
                 raise
+            if collected_output_items or (agent._codex_streamed_text_parts and not has_tool_calls):
+                synthesized = _codex_synthesized_response(
+                    model=api_kwargs.get("model"),
+                    output_items=collected_output_items,
+                    text_parts=None if has_tool_calls else agent._codex_streamed_text_parts,
+                    log_context=agent._client_log_context(),
+                )
+                if synthesized is not None:
+                    return synthesized
             if attempt < max_stream_retries:
                 logger.warning(
                     "Codex Responses stream helper hit nullable-event TypeError "
@@ -459,6 +510,21 @@ def run_codex_create_stream_fallback(agent, api_kwargs: dict, client: Any = None
                             len(collected_text_deltas), len(assembled),
                         )
                 return terminal_response
+    except TypeError as exc:
+        if not _is_codex_stream_state_type_error(exc):
+            raise
+        synthesized = _codex_synthesized_response(
+            model=fallback_kwargs.get("model"),
+            output_items=collected_output_items,
+            text_parts=collected_text_deltas,
+            log_context=agent._client_log_context(),
+        )
+        if synthesized is not None:
+            return synthesized
+        raise RuntimeError(
+            "Responses create(stream=True) fallback failed while finalizing a "
+            "provider response with output=null and no recoverable deltas."
+        ) from exc
     finally:
         close_fn = getattr(stream_or_response, "close", None)
         if callable(close_fn):
