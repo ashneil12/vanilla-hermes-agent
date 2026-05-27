@@ -1,18 +1,9 @@
 name: Docker Build and Publish
 
 on:
+  # Manual only. builderbox-1 is the primary trusted image publisher;
+  # this GitHub workflow remains a backup path and must not race :stable on merge.
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - '**/*.py'
-      - 'pyproject.toml'
-      - 'uv.lock'
-      - 'Dockerfile'
-      - 'docker/**'
-      - '.github/workflows/docker-publish.yml'
-  release:
-    types: [published]
 
 permissions:
   contents: read
