@@ -1689,6 +1689,9 @@ class APIServerAdapter(BasePlatformAdapter):
         auth_err = self._check_auth(request)
         if auth_err:
             return auth_err
+        gateway_session_key, key_err = self._parse_session_key_header(request)
+        if key_err is not None:
+            return key_err
 
         session_id = request.match_info["session_id"]
         db = self._get_session_db()
@@ -1838,6 +1841,7 @@ class APIServerAdapter(BasePlatformAdapter):
                         session_id=session_id,
                         stream_delta_callback=_on_delta,
                         tool_progress_callback=_on_tool_progress,
+                        gateway_session_key=gateway_session_key,
                     )
                     agent._session_db = db
                     agent_ref[0] = agent
@@ -1890,7 +1894,10 @@ class APIServerAdapter(BasePlatformAdapter):
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
+            "X-Hermes-Session-Id": session_id,
         }
+        if gateway_session_key:
+            sse_headers["X-Hermes-Session-Key"] = gateway_session_key
         origin = request.headers.get("Origin", "")
         cors = self._cors_headers_for_origin(origin) if origin else None
         if cors:
@@ -3363,144 +3370,6 @@ class APIServerAdapter(BasePlatformAdapter):
             headers=headers,
         )
 
-    async def _handle_session_chat_stream(self, request: "web.Request") -> "web.StreamResponse":
-        """POST /api/sessions/{session_id}/chat/stream — SSE wrapper over _run_agent."""
-        auth_err = self._check_auth(request)
-        if auth_err:
-            return auth_err
-        gateway_session_key, key_err = self._parse_session_key_header(request)
-        if key_err is not None:
-            return key_err
-        session_id = request.match_info["session_id"]
-        _, err = self._get_existing_session_or_404(session_id)
-        if err:
-            return err
-        body, err = await self._read_json_body(request)
-        if err:
-            return err
-        user_message, err = _session_chat_user_message(body)
-        if err is not None:
-            return err
-        system_prompt = body.get("system_message") or body.get("instructions")
-        if system_prompt is not None and not isinstance(system_prompt, str):
-            return web.json_response(_openai_error("system_message must be a string", code="invalid_system_message"), status=400)
-
-        loop = asyncio.get_running_loop()
-        queue: "asyncio.Queue[Optional[tuple[str, Dict[str, Any]]]]" = asyncio.Queue()
-        message_id = f"msg_{uuid.uuid4().hex}"
-        run_id = f"run_{uuid.uuid4().hex}"
-        seq = 0
-
-        def _event_payload(name: str, payload: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
-            nonlocal seq
-            seq += 1
-            payload.setdefault("session_id", session_id)
-            payload.setdefault("run_id", run_id)
-            payload.setdefault("seq", seq)
-            payload.setdefault("ts", time.time())
-            return name, payload
-
-        def _enqueue(name: str, payload: Dict[str, Any]) -> None:
-            event = _event_payload(name, payload)
-            try:
-                running_loop = asyncio.get_running_loop()
-            except RuntimeError:
-                running_loop = None
-            try:
-                if running_loop is loop:
-                    queue.put_nowait(event)
-                else:
-                    loop.call_soon_threadsafe(queue.put_nowait, event)
-            except RuntimeError:
-                pass
-
-        def _delta(delta: str) -> None:
-            if delta:
-                _enqueue("assistant.delta", {"message_id": message_id, "delta": delta})
-
-        def _tool_progress(event_type: str, tool_name: str = None, preview: str = None, args=None, **kwargs) -> None:
-            if event_type == "reasoning.available":
-                _enqueue("tool.progress", {"message_id": message_id, "tool_name": tool_name or "_thinking", "delta": preview or ""})
-            elif event_type in {"tool.started", "tool.completed", "tool.failed"}:
-                event_name = event_type.replace("tool.", "tool.")
-                _enqueue(event_name, {"message_id": message_id, "tool_name": tool_name, "preview": preview, "args": args})
-
-        async def _run_and_signal() -> None:
-            try:
-                await queue.put(_event_payload("run.started", {"user_message": {"role": "user", "content": user_message}}))
-                await queue.put(_event_payload("message.started", {"message": {"id": message_id, "role": "assistant"}}))
-                history = self._conversation_history_for_session(session_id)
-                result, usage = await self._run_agent(
-                    user_message=user_message,
-                    conversation_history=history,
-                    ephemeral_system_prompt=system_prompt,
-                    session_id=session_id,
-                    stream_delta_callback=_delta,
-                    tool_progress_callback=_tool_progress,
-                    gateway_session_key=gateway_session_key,
-                )
-                final_response = result.get("final_response", "") if isinstance(result, dict) else ""
-                effective_session_id = result.get("session_id", session_id) if isinstance(result, dict) else session_id
-                await queue.put(_event_payload("assistant.completed", {
-                    "session_id": effective_session_id,
-                    "message_id": message_id,
-                    "content": final_response,
-                    "completed": True,
-                    "partial": False,
-                    "interrupted": False,
-                }))
-                await queue.put(_event_payload("run.completed", {
-                    "session_id": effective_session_id,
-                    "message_id": message_id,
-                    "completed": True,
-                    "usage": usage,
-                }))
-            except Exception as exc:
-                logger.exception("[api_server] session chat stream failed")
-                await queue.put(_event_payload("error", {"message": str(exc)}))
-            finally:
-                await queue.put(_event_payload("done", {}))
-                await queue.put(None)
-
-        task = asyncio.create_task(_run_and_signal())
-        try:
-            self._background_tasks.add(task)
-        except TypeError:
-            pass
-        if hasattr(task, "add_done_callback"):
-            task.add_done_callback(self._background_tasks.discard)
-
-        headers = {
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-            "X-Hermes-Session-Id": session_id,
-        }
-        if gateway_session_key:
-            headers["X-Hermes-Session-Key"] = gateway_session_key
-        response = web.StreamResponse(status=200, headers=headers)
-        await response.prepare(request)
-        last_write = time.monotonic()
-        try:
-            while True:
-                try:
-                    item = await asyncio.wait_for(queue.get(), timeout=CHAT_COMPLETIONS_SSE_KEEPALIVE_SECONDS)
-                except asyncio.TimeoutError:
-                    await response.write(b": keepalive\n\n")
-                    last_write = time.monotonic()
-                    continue
-                if item is None:
-                    break
-                name, payload = item
-                data = json.dumps(payload, ensure_ascii=False)
-                await response.write(f"event: {name}\ndata: {data}\n\n".encode("utf-8"))
-                last_write = time.monotonic()
-        except (asyncio.CancelledError, ConnectionResetError):
-            task.cancel()
-            raise
-        except Exception as exc:
-            logger.debug("[api_server] session SSE stream error: %s", exc)
-        return response
 
     async def _handle_chat_completions(self, request: "web.Request") -> "web.Response":
         """POST /v1/chat/completions — OpenAI Chat Completions format."""
