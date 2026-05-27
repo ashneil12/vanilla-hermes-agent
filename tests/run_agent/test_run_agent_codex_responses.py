@@ -174,6 +174,24 @@ class _FakeResponsesStream:
         return self._final_response
 
 
+class _FakeResponsesStreamWithTerminalTypeError:
+    def __init__(self, events):
+        self._events = list(events)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def __iter__(self):
+        yield from self._events
+        raise TypeError("'NoneType' object is not iterable")
+
+    def get_final_response(self):
+        raise AssertionError("terminal TypeError should be handled before final response")
+
+
 class _FakeCreateStream:
     def __init__(self, events):
         self._events = list(events)
@@ -181,6 +199,19 @@ class _FakeCreateStream:
 
     def __iter__(self):
         return iter(self._events)
+
+    def close(self):
+        self.closed = True
+
+
+class _FakeCreateStreamWithTerminalTypeError:
+    def __init__(self, events):
+        self._events = list(events)
+        self.closed = False
+
+    def __iter__(self):
+        yield from self._events
+        raise TypeError("'NoneType' object is not iterable")
 
     def close(self):
         self.closed = True
@@ -448,6 +479,67 @@ def test_run_codex_stream_falls_back_to_create_after_stream_completion_error(mon
     assert response.output[0].content[0].text == "create fallback ok"
 
 
+def test_run_codex_stream_falls_back_after_nullable_event_typeerror(monkeypatch, caplog):
+    agent = _build_agent(monkeypatch)
+    calls = {"stream": 0, "create": 0}
+
+    def _fake_stream(**kwargs):
+        calls["stream"] += 1
+        return _FakeResponsesStream(
+            final_error=TypeError("'NoneType' object is not iterable")
+        )
+
+    def _fake_create(**kwargs):
+        calls["create"] += 1
+        assert kwargs.get("stream") is True
+        return _codex_message_response("recovered from nullable stream event")
+
+    agent.client = SimpleNamespace(
+        responses=SimpleNamespace(
+            stream=_fake_stream,
+            create=_fake_create,
+        )
+    )
+
+    with caplog.at_level("WARNING", logger="agent.codex_runtime"):
+        response = agent._run_codex_stream(_codex_request_kwargs())
+
+    assert calls["stream"] == 2
+    assert calls["create"] == 1
+    assert response.output[0].content[0].text == "recovered from nullable stream event"
+    assert "nullable-event TypeError" in caplog.text
+
+
+def test_run_codex_stream_synthesizes_after_nullable_terminal_with_text(monkeypatch, caplog):
+    agent = _build_agent(monkeypatch)
+    calls = {"stream": 0, "create": 0}
+
+    def _fake_stream(**kwargs):
+        calls["stream"] += 1
+        return _FakeResponsesStreamWithTerminalTypeError(
+            [SimpleNamespace(type="response.output_text.delta", delta="OK")]
+        )
+
+    def _fake_create(**kwargs):
+        calls["create"] += 1
+        return _codex_message_response("should not need fallback")
+
+    agent.client = SimpleNamespace(
+        responses=SimpleNamespace(
+            stream=_fake_stream,
+            create=_fake_create,
+        )
+    )
+
+    with caplog.at_level("WARNING", logger="agent.codex_runtime"):
+        response = agent._run_codex_stream(_codex_request_kwargs())
+
+    assert calls["stream"] == 1
+    assert calls["create"] == 0
+    assert response.output[0].content[0].text == "OK"
+    assert "synthesizing completed response" in caplog.text
+
+
 def test_run_codex_stream_fallback_parses_create_stream_events(monkeypatch):
     agent = _build_agent(monkeypatch)
     calls = {"stream": 0, "create": 0}
@@ -482,6 +574,29 @@ def test_run_codex_stream_fallback_parses_create_stream_events(monkeypatch):
     assert calls["create"] == 1
     assert create_stream.closed is True
     assert response.output[0].content[0].text == "streamed create ok"
+
+
+def test_run_codex_create_stream_fallback_synthesizes_after_nullable_terminal(monkeypatch, caplog):
+    agent = _build_agent(monkeypatch)
+    create_stream = _FakeCreateStreamWithTerminalTypeError(
+        [
+            SimpleNamespace(type="response.created"),
+            SimpleNamespace(type="response.output_text.delta", delta="OK"),
+        ]
+    )
+
+    agent.client = SimpleNamespace(
+        responses=SimpleNamespace(
+            create=lambda **kwargs: create_stream,
+        )
+    )
+
+    with caplog.at_level("WARNING", logger="agent.codex_runtime"):
+        response = agent._run_codex_create_stream_fallback(_codex_request_kwargs())
+
+    assert create_stream.closed is True
+    assert response.output[0].content[0].text == "OK"
+    assert "synthesizing completed response" in caplog.text
 
 
 def test_run_conversation_codex_plain_text(monkeypatch):

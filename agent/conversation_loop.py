@@ -2917,7 +2917,12 @@ def run_conversation(
                                 agent._vprint(f"{agent.log_prefix}      • Check credits: https://openrouter.ai/settings/credits", force=True)
                     else:
                         agent._vprint(f"{agent.log_prefix}   💡 This type of error won't be fixed by retrying.", force=True)
-                    logger.error(f"{agent.log_prefix}Non-retryable client error: {api_error}")
+                    logger.error(
+                        "%sNon-retryable client error: %s",
+                        agent.log_prefix,
+                        api_error,
+                        exc_info=True,
+                    )
                     # Skip session persistence when the error is likely
                     # context-overflow related (status 400 + large session).
                     # Persisting the failed user message would make the
