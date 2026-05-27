@@ -50,6 +50,14 @@ AUTHOR_MAP = {
     "ethie@nous": "ethernet8023",
     "liuhao1024@users.noreply.github.com": "liuhao1024",
     "weichangyuwcy@gmail.com": "chyuwei",  # 2026-05-24 sync
+    # 2026-05-27 upstream sync (check-attribution flagged these).
+    "JohnC1009@users.noreply.github.com": "JohnC1009",
+    "chris+dora@cmullins.io": "cmullins70",
+    "david@nutricraft.ca": "cyb0rgk1tty",
+    "donovan-yohan@users.noreply.github.com": "donovan-yohan",
+    "hello@nami4d.tech": "Nami4D",
+    "sanghyuk_seo@nexcubecorp.com": "sanghyuk-seo-nexcube",
+    "subrtt@gmail.com": "Brixyy",
     "9592417+adam91holt@users.noreply.github.com": "adam91holt",
     "augustine@hermesos.cloud": "ashneil12",
     "baxter@bitreserve.ai": "BaxBit",
