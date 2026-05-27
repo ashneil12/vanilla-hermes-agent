@@ -26,6 +26,12 @@ from typing import Any, Dict, List
 logger = logging.getLogger(__name__)
 
 
+def _is_codex_stream_state_type_error(exc: TypeError) -> bool:
+    """Return True for SDK stream-state crashes caused by nullable event fields."""
+    text = str(exc).lower()
+    return "nonetype" in text and "not iterable" in text
+
+
 def run_codex_app_server_turn(
     agent,
     *,
@@ -335,6 +341,26 @@ def run_codex_stream(agent, api_kwargs: dict, client: Any = None, on_first_delta
                 )
                 return agent._run_codex_create_stream_fallback(api_kwargs, client=active_client)
             raise
+        except TypeError as exc:
+            if not _is_codex_stream_state_type_error(exc):
+                raise
+            if attempt < max_stream_retries:
+                logger.warning(
+                    "Codex Responses stream helper hit nullable-event TypeError "
+                    "(attempt %s/%s); retrying before fallback. %s",
+                    attempt + 1,
+                    max_stream_retries + 1,
+                    agent._client_log_context(),
+                    exc_info=True,
+                )
+                continue
+            logger.warning(
+                "Codex Responses stream helper hit nullable-event TypeError; "
+                "falling back to create(stream=True). %s",
+                agent._client_log_context(),
+                exc_info=True,
+            )
+            return agent._run_codex_create_stream_fallback(api_kwargs, client=active_client)
 
 
 
