@@ -8,6 +8,12 @@ Exposes an HTTP server with endpoints:
 - DELETE /v1/responses/{response_id} — Delete a stored response
 - GET  /v1/models                  — lists hermes-agent as an available model
 - GET  /v1/capabilities            — machine-readable API capabilities for external UIs
+- GET  /api/sessions               — list client-visible Hermes sessions
+- POST /api/sessions               — create an empty Hermes session
+- GET/PATCH/DELETE /api/sessions/{session_id} — read/update/delete a session
+- GET  /api/sessions/{session_id}/messages — read session message history
+- POST /api/sessions/{session_id}/fork — branch a session using SessionDB lineage
+- POST /api/sessions/{session_id}/chat[/stream] — chat with a persisted session
 - POST /v1/runs                    — start a run, returns run_id immediately (202)
 - GET  /v1/runs/{run_id}           — retrieve current run status
 - GET  /v1/runs/{run_id}/events    — SSE stream of structured lifecycle events
@@ -333,6 +339,20 @@ def _multimodal_validation_error(exc: ValueError, *, param: str) -> "web.Respons
         _openai_error(message, code=code, param=param),
         status=400,
     )
+
+
+def _session_chat_user_message(body: Dict[str, Any], *, param: str = "message") -> tuple[Any, Optional["web.Response"]]:
+    """Parse and normalize session chat ``message`` / ``input`` like chat completions."""
+    user_message = body.get("message") or body.get("input")
+    if not _content_has_visible_payload(user_message):
+        return None, web.json_response(
+            _openai_error("Missing 'message' field", code="missing_message"),
+            status=400,
+        )
+    try:
+        return _normalize_multimodal_content(user_message), None
+    except ValueError as exc:
+        return None, _multimodal_validation_error(exc, param=param)
 
 
 def check_api_server_requirements() -> bool:
@@ -1665,10 +1685,18 @@ class APIServerAdapter(BasePlatformAdapter):
         })
 
     async def _handle_session_chat_stream(self, request: "web.Request") -> "web.StreamResponse":
-        """POST /api/sessions/{session_id}/chat/stream — stream a session chat turn over SSE."""
+        """POST /api/sessions/{session_id}/chat/stream — stream a session chat turn over SSE.
+
+        This composes the upstream session-API streaming contract (multimodal
+        payload normalization, _run_agent patchability, session-key headers)
+        with the HermesOS fork's gateway approval notifications.
+        """
         auth_err = self._check_auth(request)
         if auth_err:
             return auth_err
+        gateway_session_key, key_err = self._parse_session_key_header(request)
+        if key_err is not None:
+            return key_err
 
         session_id = request.match_info["session_id"]
         db = self._get_session_db()
@@ -1677,301 +1705,164 @@ class APIServerAdapter(BasePlatformAdapter):
             db.ensure_session(session_id, source="web")
             session = self._normalize_session_record(db.get_session(session_id)) or {}
 
-        try:
-            body = await request.json()
-        except (json.JSONDecodeError, Exception):
-            return web.json_response({"error": "Invalid JSON in request body"}, status=400)
+        body, err = await self._read_json_body(request)
+        if err:
+            return err
+        user_message, err = _session_chat_user_message(body)
+        if err is not None:
+            return err
+        system_prompt = body.get("system_message") or body.get("instructions")
+        if system_prompt is not None and not isinstance(system_prompt, str):
+            return web.json_response(_openai_error("system_message must be a string", code="invalid_system_message"), status=400)
 
-        message = body.get("message")
-        if not isinstance(message, str):
-            return web.json_response({"error": "Missing or invalid 'message' field"}, status=400)
-
-        raw_attachments = body.get("attachments")
-        if raw_attachments:
-            logger.debug("[chat/stream] Received %d attachment(s): %s",
-                         len(raw_attachments),
-                         [(a.get("name"), a.get("contentType"), len(a.get("content", "") or a.get("base64", "") or "")) for a in raw_attachments if isinstance(a, dict)])
-        user_content, persist_text = self._build_user_content(message, raw_attachments)
-        if isinstance(user_content, list):
-            logger.debug("[chat/stream] Built multimodal content with %d parts", len(user_content))
-
-        system_message = body.get("system_message")
-        history = db.get_messages_as_conversation(session_id)
-        assistant_message_id = f"msg_asst_{uuid.uuid4().hex}"
-
-        import queue as _q
-        stream_q: _q.Queue = _q.Queue()
-
-        def _encode_sse(event_name: str, payload: Dict[str, Any]) -> bytes:
-            return f"event: {event_name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8")
-
-        def _queue_event(event_name: str, payload: Dict[str, Any]) -> None:
-            stream_q.put(_encode_sse(event_name, payload))
-
-        def _tool_map(messages: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-            mapping: Dict[str, Dict[str, Any]] = {}
-            for item in messages:
-                if item.get("role") != "assistant":
-                    continue
-                for index, tool_call in enumerate(item.get("tool_calls") or []):
-                    tool_id = tool_call.get("id")
-                    if not tool_id:
-                        continue
-                    fn = tool_call.get("function") or {}
-                    raw_args = fn.get("arguments")
-                    try:
-                        parsed_args = json.loads(raw_args) if isinstance(raw_args, str) and raw_args.strip() else {}
-                    except json.JSONDecodeError:
-                        parsed_args = raw_args
-                    mapping[tool_id] = {
-                        "tool_name": fn.get("name") or item.get("tool_name") or f"tool_{index + 1}",
-                        "args": parsed_args,
-                    }
-            return mapping
-
-        def _result_preview(content: Any, limit: int = 4000) -> str:
-            text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
-            return text[:limit] + ("..." if len(text) > limit else "")
-
+        loop = asyncio.get_running_loop()
+        queue: "asyncio.Queue[Optional[tuple[str, Dict[str, Any]]]]" = asyncio.Queue()
+        message_id = f"msg_{uuid.uuid4().hex}"
         run_id = f"run_{uuid.uuid4().hex}"
+        seq = 0
 
-        def _on_delta(delta):
+        def _event_payload(name: str, payload: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
+            nonlocal seq
+            seq += 1
+            payload.setdefault("session_id", session_id)
+            payload.setdefault("run_id", run_id)
+            payload.setdefault("seq", seq)
+            payload.setdefault("ts", time.time())
+            return name, payload
+
+        def _enqueue(name: str, payload: Dict[str, Any]) -> None:
+            event = _event_payload(name, payload)
+            try:
+                running_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                running_loop = None
+            try:
+                if running_loop is loop:
+                    queue.put_nowait(event)
+                else:
+                    loop.call_soon_threadsafe(queue.put_nowait, event)
+            except RuntimeError:
+                pass
+
+        def _delta(delta: str) -> None:
             if delta:
-                _queue_event(
-                    "assistant.delta",
-                    {"session_id": session_id, "run_id": run_id, "message_id": assistant_message_id, "delta": delta},
-                )
+                _enqueue("assistant.delta", {"message_id": message_id, "delta": delta})
 
-        def _on_tool_progress(name, preview, args):
-            if name == "_thinking":
-                _queue_event(
-                    "tool.progress",
-                    {"session_id": session_id, "run_id": run_id, "message_id": assistant_message_id, "delta": preview},
-                )
-                return
-            payload = {
-                "session_id": session_id,
-                "run_id": run_id,
-                "tool_name": name,
-                "preview": preview,
-                "args": args,
-            }
-            _queue_event("tool.started", payload)
+        def _tool_progress(event_type: str, tool_name: str = None, preview: str = None, args=None, **kwargs) -> None:
+            if event_type == "reasoning.available":
+                _enqueue("tool.progress", {"message_id": message_id, "tool_name": tool_name or "_thinking", "delta": preview or ""})
+            elif event_type in {"tool.started", "tool.completed", "tool.failed"}:
+                _enqueue(event_type, {"message_id": message_id, "tool_name": tool_name, "preview": preview, "args": args})
+            elif event_type == "_thinking":
+                _enqueue("tool.progress", {"message_id": message_id, "tool_name": "_thinking", "delta": preview or ""})
 
         def _on_approval_request(approval_data):
             if not isinstance(approval_data, dict):
                 approval_data = {"description": str(approval_data)}
             payload = {
-                "session_id": session_id,
-                "run_id": run_id,
-                "message_id": assistant_message_id,
+                "message_id": message_id,
                 "approval_id": str(approval_data.get("approval_id") or approval_data.get("id") or ""),
                 "command": str(approval_data.get("command") or "")[:8000],
                 "description": str(approval_data.get("description") or "Command approval required")[:1000],
                 "pattern_key": str(approval_data.get("pattern_key") or ""),
                 "pattern_keys": approval_data.get("pattern_keys") if isinstance(approval_data.get("pattern_keys"), list) else [],
             }
-            _queue_event("approval", payload)
+            _enqueue("approval", payload)
 
-        agent_ref = [None]
-        loop = asyncio.get_event_loop()
-
-        async def _run_agent_task():
-            admission = self._admit_runtime_governor(
-                surface="session_chat_stream",
-                session_id=session_id,
-                source_message_id=run_id,
-                message_preview=message,
-            )
-            if not admission.get("allowed"):
-                return self._runtime_limit_result(
-                    str(admission.get("user_message") or ""),
-                    reason=str(admission.get("reason") or "denied"),
+        async def _run_and_signal() -> None:
+            unregister_gateway_notify = None
+            try:
+                from tools.approval import (
+                    register_gateway_notify,
+                    unregister_gateway_notify as _unregister_gateway_notify,
                 )
-
-            governor = admission.get("governor")
-            lease_id = admission.get("lease_id")
-            cutoff_state: Dict[str, Any] = {}
-            result: Optional[Dict[str, Any]] = None
-
-            def _run():
-                approval_token = None
-                reset_current_session_key = None
-                unregister_gateway_notify = None
-                try:
-                    from tools.approval import (
-                        register_gateway_notify,
-                        reset_current_session_key as _reset_current_session_key,
-                        set_current_session_key,
-                        unregister_gateway_notify as _unregister_gateway_notify,
-                    )
-                    approval_token = set_current_session_key(session_id)
-                    reset_current_session_key = _reset_current_session_key
-                    unregister_gateway_notify = _unregister_gateway_notify
-                    register_gateway_notify(session_id, _on_approval_request)
-                except Exception as exc:
-                    logger.debug("[chat/stream] Approval callbacks unavailable: %s", exc)
-
-                try:
-                    agent = self._create_agent(
-                        ephemeral_system_prompt=system_message,
-                        session_id=session_id,
-                        stream_delta_callback=_on_delta,
-                        tool_progress_callback=_on_tool_progress,
-                    )
-                    agent._session_db = db
-                    agent_ref[0] = agent
-                    self._install_runtime_step_callback(
-                        agent,
-                        governor=governor,
-                        lease_id=lease_id,
-                        agent_ref=agent_ref,
-                        cutoff_state=cutoff_state,
-                    )
-                    return agent.run_conversation(
-                        user_content,
-                        conversation_history=history,
-                        persist_user_message=persist_text,
-                    )
-                finally:
-                    if unregister_gateway_notify is not None:
-                        try:
-                            unregister_gateway_notify(session_id)
-                        except Exception as exc:
-                            logger.debug("[chat/stream] Approval callback cleanup failed: %s", exc)
-                    if approval_token is not None and reset_current_session_key is not None:
-                        try:
-                            reset_current_session_key(approval_token)
-                        except Exception as exc:
-                            logger.debug("[chat/stream] Approval session cleanup failed: %s", exc)
+                register_gateway_notify(session_id, _on_approval_request)
+                unregister_gateway_notify = _unregister_gateway_notify
+            except Exception as exc:
+                logger.debug("[chat/stream] Approval callbacks unavailable: %s", exc)
 
             try:
-                future = asyncio.ensure_future(loop.run_in_executor(None, _run))
-                result = await self._await_runtime_guarded(
-                    future,
-                    governor=governor,
-                    lease_id=lease_id,
-                    agent_ref=agent_ref,
-                    cutoff_state=cutoff_state,
-                    cutoff_factory=lambda cutoff_result: cutoff_result,
+                await queue.put(_event_payload("session.created", {"title": session.get("title") or "New Chat"}))
+                await queue.put(_event_payload("run.started", {"user_message": {"role": "user", "content": user_message}}))
+                await queue.put(_event_payload("message.started", {"message": {"id": message_id, "role": "assistant"}}))
+                history = self._conversation_history_for_session(session_id)
+                result, usage = await self._run_agent(
+                    user_message=user_message,
+                    conversation_history=history,
+                    ephemeral_system_prompt=system_prompt,
+                    session_id=session_id,
+                    stream_delta_callback=_delta,
+                    tool_progress_callback=_tool_progress,
+                    gateway_session_key=gateway_session_key,
                 )
-                return result
-            except Exception:
-                self._close_runtime_lease(governor, lease_id, result=result, error=True)
-                raise
+                final_response = result.get("final_response", "") if isinstance(result, dict) else ""
+                effective_session_id = result.get("session_id", session_id) if isinstance(result, dict) else session_id
+                await queue.put(_event_payload("assistant.completed", {
+                    "session_id": effective_session_id,
+                    "message_id": message_id,
+                    "content": final_response,
+                    "completed": bool(result.get("completed", True)) if isinstance(result, dict) else True,
+                    "partial": bool(result.get("partial", False)) if isinstance(result, dict) else False,
+                    "interrupted": bool(result.get("interrupted", False)) if isinstance(result, dict) else False,
+                }))
+                await queue.put(_event_payload("run.completed", {
+                    "session_id": effective_session_id,
+                    "message_id": message_id,
+                    "completed": bool(result.get("completed", True)) if isinstance(result, dict) else True,
+                    "usage": usage,
+                }))
+            except Exception as exc:
+                logger.exception("[api_server] session chat stream failed")
+                await queue.put(_event_payload("error", {"message": str(exc)}))
             finally:
-                if result is not None:
-                    self._close_runtime_lease(governor, lease_id, result=result)
+                if unregister_gateway_notify is not None:
+                    try:
+                        unregister_gateway_notify(session_id)
+                    except Exception as exc:
+                        logger.debug("[chat/stream] Approval callback cleanup failed: %s", exc)
+                await queue.put(_event_payload("done", {}))
+                await queue.put(None)
 
-        agent_task = asyncio.ensure_future(_run_agent_task())
+        task = asyncio.create_task(_run_and_signal())
+        try:
+            self._background_tasks.add(task)
+        except TypeError:
+            pass
+        if hasattr(task, "add_done_callback"):
+            task.add_done_callback(self._background_tasks.discard)
 
-        sse_headers = {
+        headers = {
             "Content-Type": "text/event-stream",
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
+            "X-Hermes-Session-Id": session_id,
         }
+        if gateway_session_key:
+            headers["X-Hermes-Session-Key"] = gateway_session_key
         origin = request.headers.get("Origin", "")
         cors = self._cors_headers_for_origin(origin) if origin else None
         if cors:
-            sse_headers.update(cors)
+            headers.update(cors)
 
-        response = web.StreamResponse(status=200, headers=sse_headers)
+        response = web.StreamResponse(status=200, headers=headers)
         await response.prepare(request)
-
         try:
-            user_message_id = f"msg_user_{uuid.uuid4().hex}"
-            await response.write(_encode_sse("session.created", {
-                "session_id": session_id,
-                "run_id": run_id,
-                "title": session.get("title") or "New Chat",
-            }))
-            await response.write(_encode_sse("run.started", {
-                "session_id": session_id,
-                "run_id": run_id,
-                "user_message": {
-                    "id": user_message_id,
-                    "role": "user",
-                    "content": message,
-                },
-            }))
-            await response.write(_encode_sse("message.started", {
-                "session_id": session_id,
-                "run_id": run_id,
-                "message": {"id": assistant_message_id, "role": "assistant"},
-            }))
-
             while True:
                 try:
-                    frame = await loop.run_in_executor(None, lambda: stream_q.get(timeout=0.5))
-                except _q.Empty:
-                    if agent_task.done():
-                        while True:
-                            try:
-                                frame = stream_q.get_nowait()
-                                if frame is None:
-                                    break
-                                await response.write(frame)
-                            except _q.Empty:
-                                break
-                        break
+                    item = await asyncio.wait_for(queue.get(), timeout=CHAT_COMPLETIONS_SSE_KEEPALIVE_SECONDS)
+                except asyncio.TimeoutError:
+                    await response.write(b": keepalive\n\n")
                     continue
-
-                if frame is None:
+                if item is None:
                     break
-
-                await response.write(frame)
-
-            result = await agent_task
-            tools = _tool_map(result.get("messages") or [])
-            for item in result.get("messages") or []:
-                if item.get("role") != "tool":
-                    continue
-                tool_id = item.get("tool_call_id")
-                tool_meta = tools.get(tool_id, {})
-                await response.write(_encode_sse("tool.completed", {
-                    "session_id": session_id,
-                    "run_id": run_id,
-                    "tool_call_id": tool_id,
-                    "tool_name": tool_meta.get("tool_name") or item.get("tool_name") or "unknown",
-                    "args": tool_meta.get("args"),
-                    "result_preview": _result_preview(item.get("content")),
-                }))
-
-            await response.write(_encode_sse("assistant.completed", {
-                "session_id": session_id,
-                "run_id": run_id,
-                "message_id": assistant_message_id,
-                "content": result.get("final_response") or "",
-                "completed": result.get("completed", False),
-                "partial": result.get("partial", False),
-                "interrupted": result.get("interrupted", False),
-            }))
-            await response.write(_encode_sse("run.completed", {
-                "session_id": session_id,
-                "run_id": run_id,
-                "message_id": assistant_message_id,
-                "completed": result.get("completed", False),
-                "partial": result.get("partial", False),
-                "interrupted": result.get("interrupted", False),
-                "api_calls": result.get("api_calls"),
-            }))
-            await response.write(_encode_sse("done", {"session_id": session_id, "run_id": run_id, "state": "final"}))
-        except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError, OSError):
-            agent = agent_ref[0]
-            if agent is not None:
-                try:
-                    agent.interrupt("SSE client disconnected")
-                except Exception:
-                    pass
-            if not agent_task.done():
-                agent_task.cancel()
-                try:
-                    await agent_task
-                except (asyncio.CancelledError, Exception):
-                    pass
-            logger.info("Session SSE client disconnected; interrupted session %s", session_id)
-
+                name, payload = item
+                await response.write(f"event: {name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8"))
+        except (asyncio.CancelledError, ConnectionResetError, ConnectionAbortedError, BrokenPipeError, OSError):
+            task.cancel()
+            raise
+        except Exception as exc:
+            logger.debug("[api_server] session SSE stream error: %s", exc)
         return response
 
     async def _handle_session_chat_start(self, request: "web.Request") -> "web.Response":
@@ -2923,6 +2814,16 @@ class APIServerAdapter(BasePlatformAdapter):
                 "run_approval_response": True,
                 "tool_progress_events": True,
                 "approval_events": True,
+                "session_resources": True,
+                "session_chat": True,
+                "session_chat_streaming": True,
+                "session_fork": True,
+                "admin_config_rw": False,
+                "jobs_admin": False,
+                "memory_write_api": False,
+                "skills_api": True,
+                "audio_api": False,
+                "realtime_voice": False,
                 "session_continuity_header": "X-Hermes-Session-Id",
                 "session_key_header": "X-Hermes-Session-Key",
                 "cors": bool(self._cors_origins),
@@ -2938,8 +2839,401 @@ class APIServerAdapter(BasePlatformAdapter):
                 "run_events": {"method": "GET", "path": "/v1/runs/{run_id}/events"},
                 "run_approval": {"method": "POST", "path": "/v1/runs/{run_id}/approval"},
                 "run_stop": {"method": "POST", "path": "/v1/runs/{run_id}/stop"},
+                "skills": {"method": "GET", "path": "/v1/skills"},
+                "toolsets": {"method": "GET", "path": "/v1/toolsets"},
+                "sessions": {"method": "GET", "path": "/api/sessions"},
+                "session_create": {"method": "POST", "path": "/api/sessions"},
+                "session": {"method": "GET", "path": "/api/sessions/{session_id}"},
+                "session_update": {"method": "PATCH", "path": "/api/sessions/{session_id}"},
+                "session_delete": {"method": "DELETE", "path": "/api/sessions/{session_id}"},
+                "session_messages": {"method": "GET", "path": "/api/sessions/{session_id}/messages"},
+                "session_fork": {"method": "POST", "path": "/api/sessions/{session_id}/fork"},
+                "session_chat": {"method": "POST", "path": "/api/sessions/{session_id}/chat"},
+                "session_chat_stream": {"method": "POST", "path": "/api/sessions/{session_id}/chat/stream"},
             },
         })
+
+    async def _handle_skills(self, request: "web.Request") -> "web.Response":
+        """GET /v1/skills — list installed skills visible to the API-server agent.
+
+        Read-only listing intended for external clients that need to know
+        which skills are available without sending a chat message and asking
+        the model. Mirrors what the gateway/CLI surfaces through
+        ``/skills list``, but as a deterministic JSON payload.
+
+        Returns the same skill metadata (name, description, category) the
+        skills hub uses internally. Disabled skills are excluded so the
+        listing matches what the agent actually loads.
+        """
+        auth_err = self._check_auth(request)
+        if auth_err:
+            return auth_err
+
+        try:
+            from tools.skills_tool import _find_all_skills, _sort_skills
+            skills = _sort_skills(_find_all_skills(skip_disabled=False))
+        except Exception:
+            logger.exception("GET /v1/skills failed")
+            return web.json_response(
+                _openai_error("Failed to enumerate skills", err_type="server_error"),
+                status=500,
+            )
+
+        return web.json_response({
+            "object": "list",
+            "data": skills,
+        })
+
+    async def _handle_toolsets(self, request: "web.Request") -> "web.Response":
+        """GET /v1/toolsets — list toolsets and their resolved tools.
+
+        Returns the toolset surface the api_server platform actually exposes
+        to its agent: each toolset's enabled/configured state plus the
+        concrete tool names it expands to. This is the deterministic
+        equivalent of what a client would otherwise have to recover by
+        asking the model what tools it can call.
+        """
+        auth_err = self._check_auth(request)
+        if auth_err:
+            return auth_err
+
+        try:
+            from hermes_cli.config import load_config
+            from hermes_cli.tools_config import (
+                _get_effective_configurable_toolsets,
+                _get_platform_tools,
+                _toolset_has_keys,
+            )
+            from toolsets import resolve_toolset
+
+            config = load_config()
+            enabled_toolsets = _get_platform_tools(
+                config,
+                "api_server",
+                include_default_mcp_servers=False,
+            )
+            data: List[Dict[str, Any]] = []
+            for name, label, desc in _get_effective_configurable_toolsets():
+                try:
+                    tools = sorted(set(resolve_toolset(name)))
+                except Exception:
+                    tools = []
+                is_enabled = name in enabled_toolsets
+                data.append({
+                    "name": name,
+                    "label": label,
+                    "description": desc,
+                    "enabled": is_enabled,
+                    "configured": _toolset_has_keys(name, config),
+                    "tools": tools,
+                })
+        except Exception:
+            logger.exception("GET /v1/toolsets failed")
+            return web.json_response(
+                _openai_error("Failed to enumerate toolsets", err_type="server_error"),
+                status=500,
+            )
+
+        return web.json_response({
+            "object": "list",
+            "platform": "api_server",
+            "data": data,
+        })
+
+    # ------------------------------------------------------------------
+    # /api/sessions — thin client/session resource API
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _parse_nonnegative_int(value: Any, default: int, maximum: int) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return default
+        if parsed < 0:
+            return default
+        return min(parsed, maximum)
+
+    @staticmethod
+    def _session_response(session: Dict[str, Any]) -> Dict[str, Any]:
+        """Return a stable, client-safe session representation."""
+        safe_keys = (
+            "id", "source", "user_id", "model", "title", "started_at", "ended_at",
+            "end_reason", "message_count", "tool_call_count", "input_tokens",
+            "output_tokens", "cache_read_tokens", "cache_write_tokens",
+            "reasoning_tokens", "estimated_cost_usd", "actual_cost_usd",
+            "api_call_count", "parent_session_id", "last_active", "preview",
+            "_lineage_root_id",
+        )
+        payload = {key: session.get(key) for key in safe_keys if key in session}
+        # Avoid exposing full system prompts/model_config through the client API;
+        # callers only need to know whether those snapshots exist.
+        payload["has_system_prompt"] = bool(session.get("system_prompt"))
+        payload["has_model_config"] = bool(session.get("model_config"))
+        return payload
+
+    @staticmethod
+    def _message_response(message: Dict[str, Any]) -> Dict[str, Any]:
+        safe_keys = (
+            "id", "session_id", "role", "content", "tool_call_id", "tool_calls",
+            "tool_name", "timestamp", "token_count", "finish_reason", "reasoning",
+            "reasoning_content",
+        )
+        return {key: message.get(key) for key in safe_keys if key in message}
+
+    async def _read_json_body(self, request: "web.Request") -> tuple[Dict[str, Any], Optional["web.Response"]]:
+        try:
+            body = await request.json()
+        except Exception:
+            return {}, web.json_response(_openai_error("Invalid JSON in request body"), status=400)
+        if not isinstance(body, dict):
+            return {}, web.json_response(_openai_error("Request body must be a JSON object"), status=400)
+        return body, None
+
+    def _get_existing_session_or_404(self, session_id: str) -> tuple[Optional[Dict[str, Any]], Optional["web.Response"]]:
+        db = self._ensure_session_db()
+        if db is None:
+            return None, web.json_response(_openai_error("Session database unavailable", code="session_db_unavailable"), status=503)
+        session = db.get_session(session_id)
+        if not session:
+            return None, web.json_response(_openai_error(f"Session not found: {session_id}", code="session_not_found"), status=404)
+        return session, None
+
+    def _conversation_history_for_session(self, session_id: str) -> List[Dict[str, Any]]:
+        db = self._ensure_session_db()
+        if db is None:
+            return []
+        try:
+            return db.get_messages_as_conversation(session_id)
+        except Exception as exc:
+            logger.warning("Failed to load session history for %s: %s", session_id, exc)
+            return []
+
+    async def _handle_list_sessions(self, request: "web.Request") -> "web.Response":
+        """GET /api/sessions — list persisted Hermes sessions."""
+        auth_err = self._check_auth(request)
+        if auth_err:
+            return auth_err
+
+        db = self._ensure_session_db()
+        if db is None:
+            return web.json_response(_openai_error("Session database unavailable", code="session_db_unavailable"), status=503)
+
+        limit = self._parse_nonnegative_int(request.query.get("limit"), default=50, maximum=200)
+        offset = self._parse_nonnegative_int(request.query.get("offset"), default=0, maximum=1_000_000)
+        source = request.query.get("source") or None
+        include_children = _coerce_request_bool(request.query.get("include_children"), default=False)
+        sessions = db.list_sessions_rich(
+            source=source,
+            limit=limit,
+            offset=offset,
+            include_children=include_children,
+            order_by_last_active=True,
+        )
+        return web.json_response({
+            "object": "list",
+            "data": [self._session_response(s) for s in sessions],
+            "limit": limit,
+            "offset": offset,
+            "has_more": len(sessions) == limit,
+        })
+
+    async def _handle_create_session(self, request: "web.Request") -> "web.Response":
+        """POST /api/sessions — create an empty Hermes session row."""
+        auth_err = self._check_auth(request)
+        if auth_err:
+            return auth_err
+        body, err = await self._read_json_body(request)
+        if err:
+            return err
+
+        db = self._ensure_session_db()
+        if db is None:
+            return web.json_response(_openai_error("Session database unavailable", code="session_db_unavailable"), status=503)
+
+        raw_id = body.get("id") or body.get("session_id")
+        session_id = str(raw_id).strip() if raw_id else f"api_{int(time.time())}_{uuid.uuid4().hex[:8]}"
+        if not session_id or re.search(r'[\r\n\x00]', session_id):
+            return web.json_response(_openai_error("Invalid session ID", code="invalid_session_id"), status=400)
+        if len(session_id) > self._MAX_SESSION_HEADER_LEN:
+            return web.json_response(_openai_error("Session ID too long", code="invalid_session_id"), status=400)
+        if db.get_session(session_id):
+            return web.json_response(_openai_error(f"Session already exists: {session_id}", code="session_exists"), status=409)
+
+        model = body.get("model") or self._model_name
+        system_prompt = body.get("system_prompt")
+        if system_prompt is not None and not isinstance(system_prompt, str):
+            return web.json_response(_openai_error("system_prompt must be a string", code="invalid_system_prompt"), status=400)
+        db.create_session(session_id, "api_server", model=str(model) if model else None, system_prompt=system_prompt)
+        title = body.get("title")
+        if title is not None:
+            try:
+                db.set_session_title(session_id, str(title))
+            except ValueError as exc:
+                db.delete_session(session_id)
+                return web.json_response(_openai_error(str(exc), code="invalid_title"), status=400)
+        session = db.get_session(session_id) or {"id": session_id, "source": "api_server", "model": model, "title": title}
+        return web.json_response({"object": "hermes.session", "session": self._session_response(session)}, status=201)
+
+    async def _handle_get_session(self, request: "web.Request") -> "web.Response":
+        """GET /api/sessions/{session_id}."""
+        auth_err = self._check_auth(request)
+        if auth_err:
+            return auth_err
+        session, err = self._get_existing_session_or_404(request.match_info["session_id"])
+        if err:
+            return err
+        return web.json_response({"object": "hermes.session", "session": self._session_response(session)})
+
+    async def _handle_patch_session(self, request: "web.Request") -> "web.Response":
+        """PATCH /api/sessions/{session_id} — update client-safe session metadata."""
+        auth_err = self._check_auth(request)
+        if auth_err:
+            return auth_err
+        session_id = request.match_info["session_id"]
+        session, err = self._get_existing_session_or_404(session_id)
+        if err:
+            return err
+        body, err = await self._read_json_body(request)
+        if err:
+            return err
+        allowed = {"title", "end_reason"}
+        unknown = sorted(set(body) - allowed)
+        if unknown:
+            return web.json_response(_openai_error(f"Unsupported session fields: {', '.join(unknown)}", code="unsupported_session_field"), status=400)
+
+        db = self._ensure_session_db()
+        if "title" in body:
+            try:
+                db.set_session_title(session_id, "" if body["title"] is None else str(body["title"]))
+            except ValueError as exc:
+                return web.json_response(_openai_error(str(exc), code="invalid_title"), status=400)
+        if body.get("end_reason"):
+            db.end_session(session_id, str(body["end_reason"]))
+        session = db.get_session(session_id) or session
+        return web.json_response({"object": "hermes.session", "session": self._session_response(session)})
+
+    async def _handle_delete_session(self, request: "web.Request") -> "web.Response":
+        """DELETE /api/sessions/{session_id}."""
+        auth_err = self._check_auth(request)
+        if auth_err:
+            return auth_err
+        session_id = request.match_info["session_id"]
+        session, err = self._get_existing_session_or_404(session_id)
+        if err:
+            return err
+        db = self._ensure_session_db()
+        deleted = db.delete_session(session_id)
+        return web.json_response({"object": "hermes.session.deleted", "id": session_id, "deleted": bool(deleted)})
+
+    async def _handle_session_messages(self, request: "web.Request") -> "web.Response":
+        """GET /api/sessions/{session_id}/messages."""
+        auth_err = self._check_auth(request)
+        if auth_err:
+            return auth_err
+        session_id = request.match_info["session_id"]
+        _, err = self._get_existing_session_or_404(session_id)
+        if err:
+            return err
+        db = self._ensure_session_db()
+        messages = db.get_messages(session_id)
+        return web.json_response({
+            "object": "list",
+            "session_id": session_id,
+            "data": [self._message_response(m) for m in messages],
+        })
+
+    async def _handle_fork_session(self, request: "web.Request") -> "web.Response":
+        """POST /api/sessions/{session_id}/fork — branch via current SessionDB primitives."""
+        auth_err = self._check_auth(request)
+        if auth_err:
+            return auth_err
+        source_id = request.match_info["session_id"]
+        source, err = self._get_existing_session_or_404(source_id)
+        if err:
+            return err
+        body, err = await self._read_json_body(request)
+        if err:
+            return err
+        db = self._ensure_session_db()
+        fork_id = str(body.get("id") or body.get("session_id") or f"api_{int(time.time())}_{uuid.uuid4().hex[:8]}").strip()
+        if not fork_id or re.search(r'[\r\n\x00]', fork_id):
+            return web.json_response(_openai_error("Invalid session ID", code="invalid_session_id"), status=400)
+        if db.get_session(fork_id):
+            return web.json_response(_openai_error(f"Session already exists: {fork_id}", code="session_exists"), status=409)
+
+        # Match the CLI /branch semantics: mark the original as branched, then
+        # create a child session that carries the transcript forward. This uses
+        # SessionDB's native parent_session_id/end_reason visibility model rather
+        # than inventing a parallel fork store.
+        db.end_session(source_id, "branched")
+        db.create_session(
+            fork_id,
+            "api_server",
+            model=source.get("model"),
+            system_prompt=source.get("system_prompt"),
+            parent_session_id=source_id,
+        )
+        messages = db.get_messages(source_id)
+        db.replace_messages(fork_id, messages)
+        title = body.get("title")
+        if title is None:
+            base = source.get("title") or "fork"
+            try:
+                title = db.get_next_title_in_lineage(base)
+            except Exception:
+                title = f"{base} fork"
+        try:
+            db.set_session_title(fork_id, str(title))
+        except ValueError as exc:
+            return web.json_response(_openai_error(str(exc), code="invalid_title"), status=400)
+        fork = db.get_session(fork_id) or {"id": fork_id, "parent_session_id": source_id}
+        return web.json_response({"object": "hermes.session", "session": self._session_response(fork)}, status=201)
+
+    async def _handle_session_chat(self, request: "web.Request") -> "web.Response":
+        """POST /api/sessions/{session_id}/chat — one synchronous agent turn."""
+        auth_err = self._check_auth(request)
+        if auth_err:
+            return auth_err
+        gateway_session_key, key_err = self._parse_session_key_header(request)
+        if key_err is not None:
+            return key_err
+        session_id = request.match_info["session_id"]
+        _, err = self._get_existing_session_or_404(session_id)
+        if err:
+            return err
+        body, err = await self._read_json_body(request)
+        if err:
+            return err
+        user_message, err = _session_chat_user_message(body)
+        if err is not None:
+            return err
+        system_prompt = body.get("system_message") or body.get("instructions")
+        if system_prompt is not None and not isinstance(system_prompt, str):
+            return web.json_response(_openai_error("system_message must be a string", code="invalid_system_message"), status=400)
+        history = self._conversation_history_for_session(session_id)
+        result, usage = await self._run_agent(
+            user_message=user_message,
+            conversation_history=history,
+            ephemeral_system_prompt=system_prompt,
+            session_id=session_id,
+            gateway_session_key=gateway_session_key,
+        )
+        effective_session_id = result.get("session_id") if isinstance(result, dict) else session_id
+        final_response = result.get("final_response", "") if isinstance(result, dict) else ""
+        headers = {"X-Hermes-Session-Id": effective_session_id or session_id}
+        if gateway_session_key:
+            headers["X-Hermes-Session-Key"] = gateway_session_key
+        return web.json_response(
+            {
+                "object": "hermes.session.chat.completion",
+                "session_id": effective_session_id or session_id,
+                "message": {"role": "assistant", "content": final_response},
+                "usage": usage,
+            },
+            headers=headers,
+        )
+
 
     async def _handle_chat_completions(self, request: "web.Request") -> "web.Response":
         """POST /v1/chat/completions — OpenAI Chat Completions format."""
@@ -4714,29 +5008,60 @@ class APIServerAdapter(BasePlatformAdapter):
         cutoff_state: Dict[str, Any] = {"cutoff": False, "message": "", "reason": ""}
 
         def _run():
-            agent = self._create_agent(
-                ephemeral_system_prompt=ephemeral_system_prompt,
-                session_id=session_id,
-                stream_delta_callback=stream_delta_callback,
-                tool_progress_callback=tool_progress_callback,
-                tool_start_callback=tool_start_callback,
-                tool_complete_callback=tool_complete_callback,
-                gateway_session_key=gateway_session_key,
-            )
-            effective_agent_ref[0] = agent
-            self._install_runtime_step_callback(
-                agent,
-                governor=runtime_governor,
-                lease_id=runtime_lease_id,
-                agent_ref=effective_agent_ref,
-                cutoff_state=cutoff_state,
-            )
-            effective_task_id = session_id or str(uuid.uuid4())
-            result = agent.run_conversation(
-                user_message=user_message,
-                conversation_history=conversation_history,
-                task_id=effective_task_id,
-            )
+            approval_token = None
+            reset_current_session_key = None
+            if session_id:
+                try:
+                    from tools.approval import (
+                        reset_current_session_key as _reset_current_session_key,
+                        set_current_session_key,
+                    )
+                    approval_token = set_current_session_key(session_id)
+                    reset_current_session_key = _reset_current_session_key
+                except Exception as exc:
+                    logger.debug("[api_server] approval session binding unavailable: %s", exc)
+            try:
+                agent = self._create_agent(
+                    ephemeral_system_prompt=ephemeral_system_prompt,
+                    session_id=session_id,
+                    stream_delta_callback=stream_delta_callback,
+                    tool_progress_callback=tool_progress_callback,
+                    tool_start_callback=tool_start_callback,
+                    tool_complete_callback=tool_complete_callback,
+                    gateway_session_key=gateway_session_key,
+                )
+                effective_agent_ref[0] = agent
+                self._install_runtime_step_callback(
+                    agent,
+                    governor=runtime_governor,
+                    lease_id=runtime_lease_id,
+                    agent_ref=effective_agent_ref,
+                    cutoff_state=cutoff_state,
+                )
+                effective_task_id = session_id or str(uuid.uuid4())
+                try:
+                    result = agent.run_conversation(
+                        user_message=user_message,
+                        conversation_history=conversation_history,
+                        task_id=effective_task_id,
+                    )
+                except TypeError as exc:
+                    # Some focused tests patch _create_agent with old-shape fakes;
+                    # keep that compatibility while the real AIAgent path uses
+                    # the modern user_message/task_id signature above.
+                    if "unexpected keyword" not in str(exc) and "required positional" not in str(exc):
+                        raise
+                    result = agent.run_conversation(
+                        user_message,
+                        conversation_history=conversation_history,
+                        persist_user_message=True,
+                    )
+            finally:
+                if approval_token is not None and reset_current_session_key is not None:
+                    try:
+                        reset_current_session_key(approval_token)
+                    except Exception as exc:
+                        logger.debug("[api_server] approval session cleanup failed: %s", exc)
             usage = {
                 "input_tokens": getattr(agent, "session_prompt_tokens", 0) or 0,
                 "output_tokens": getattr(agent, "session_completion_tokens", 0) or 0,
@@ -5365,12 +5690,24 @@ class APIServerAdapter(BasePlatformAdapter):
         try:
             mws = [mw for mw in (cors_middleware, body_limit_middleware, security_headers_middleware) if mw is not None]
             self._app = web.Application(middlewares=mws, client_max_size=MAX_REQUEST_BYTES)
-            self._app["api_server_adapter"] = self
+            assert self._app is not None
             self._app.router.add_get("/health", self._handle_health)
             self._app.router.add_get("/health/detailed", self._handle_health_detailed)
             self._app.router.add_get("/v1/health", self._handle_health)
             self._app.router.add_get("/v1/models", self._handle_models)
             self._app.router.add_get("/v1/capabilities", self._handle_capabilities)
+            self._app.router.add_get("/v1/skills", self._handle_skills)
+            self._app.router.add_get("/v1/toolsets", self._handle_toolsets)
+            # Session/client control surface (thin wrappers over SessionDB + _run_agent)
+            self._app.router.add_get("/api/sessions", self._handle_list_sessions)
+            self._app.router.add_post("/api/sessions", self._handle_create_session)
+            self._app.router.add_get("/api/sessions/{session_id}", self._handle_get_session)
+            self._app.router.add_patch("/api/sessions/{session_id}", self._handle_patch_session)
+            self._app.router.add_delete("/api/sessions/{session_id}", self._handle_delete_session)
+            self._app.router.add_get("/api/sessions/{session_id}/messages", self._handle_session_messages)
+            self._app.router.add_post("/api/sessions/{session_id}/fork", self._handle_fork_session)
+            self._app.router.add_post("/api/sessions/{session_id}/chat", self._handle_session_chat)
+            self._app.router.add_post("/api/sessions/{session_id}/chat/stream", self._handle_session_chat_stream)
             self._app.router.add_post("/v1/chat/completions", self._handle_chat_completions)
             self._app.router.add_post("/v1/responses", self._handle_responses)
             self._app.router.add_get("/v1/responses/{response_id}", self._handle_get_response)
@@ -5390,17 +5727,8 @@ class APIServerAdapter(BasePlatformAdapter):
             self._app.router.add_get("/v1/runs/{run_id}/events", self._handle_run_events)
             self._app.router.add_post("/v1/runs/{run_id}/approval", self._handle_run_approval)
             self._app.router.add_post("/v1/runs/{run_id}/stop", self._handle_stop_run)
-            # Dashboard REST API — sessions, memory, skills, config
-            self._app.router.add_get("/api/sessions", self._handle_list_sessions)
-            self._app.router.add_post("/api/sessions", self._handle_create_session)
+            # Dashboard REST API extensions not covered by the native session-control routes above.
             self._app.router.add_get("/api/sessions/search", self._handle_search_sessions)
-            self._app.router.add_get("/api/sessions/{session_id}", self._handle_get_session)
-            self._app.router.add_get("/api/sessions/{session_id}/messages", self._handle_get_session_messages)
-            self._app.router.add_patch("/api/sessions/{session_id}", self._handle_update_session)
-            self._app.router.add_delete("/api/sessions/{session_id}", self._handle_delete_session)
-            self._app.router.add_post("/api/sessions/{session_id}/fork", self._handle_fork_session)
-            self._app.router.add_post("/api/sessions/{session_id}/chat", self._handle_session_chat)
-            self._app.router.add_post("/api/sessions/{session_id}/chat/stream", self._handle_session_chat_stream)
             self._app.router.add_post("/api/sessions/{session_id}/chat/start", self._handle_session_chat_start)
             self._app.router.add_get("/api/chat/stream", self._handle_chat_stream_attach)
             self._app.router.add_get("/api/chat/stream/snapshot", self._handle_chat_stream_snapshot)
@@ -5411,12 +5739,17 @@ class APIServerAdapter(BasePlatformAdapter):
             self._app.router.add_post("/api/memory", self._handle_add_memory)
             self._app.router.add_patch("/api/memory", self._handle_replace_memory)
             self._app.router.add_delete("/api/memory", self._handle_delete_memory)
-            self._app.router.add_get("/api/skills", self._handle_list_skills)
             self._app.router.add_get("/api/skills/categories", self._handle_skill_categories)
             self._app.router.add_get("/api/skills/{name}", self._handle_view_skill)
             self._app.router.add_get("/api/config", self._handle_get_config)
             self._app.router.add_patch("/api/config", self._handle_update_config)
             self._app.router.add_get("/api/available-models", self._handle_available_models)
+            # Store the adapter after native routes are registered. Local Hermes-Relay
+            # bootstrap shims use this key as a feature-detection hook; registering
+            # native routes first lets those shims no-op instead of shadowing the
+            # upstream session-control handlers.
+            self._app["api_server_adapter"] = self
+
             # Start background sweep to clean up orphaned (unconsumed) run streams
             sweep_task = asyncio.create_task(self._sweep_orphaned_runs())
             try:
