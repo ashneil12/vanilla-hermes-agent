@@ -49,6 +49,8 @@ AUTHOR_MAP = {
     # 2026-05-23 upstream sync (check-attribution flagged these).
     "ethie@nous": "ethernet8023",
     "liuhao1024@users.noreply.github.com": "liuhao1024",
+    "batosk2@gmail.com": "Sarbai",  # 2026-05-29 sync
+    "sohyuanchin@gmail.com": "wysie",  # 2026-05-29 sync
     "weichangyuwcy@gmail.com": "chyuwei",  # 2026-05-24 sync
     "9592417+adam91holt@users.noreply.github.com": "adam91holt",
     "augustine@hermesos.cloud": "ashneil12",
