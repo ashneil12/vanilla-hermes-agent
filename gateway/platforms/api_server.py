@@ -1806,10 +1806,12 @@ class APIServerAdapter(BasePlatformAdapter):
                     "partial": bool(result.get("partial", False)) if isinstance(result, dict) else False,
                     "interrupted": bool(result.get("interrupted", False)) if isinstance(result, dict) else False,
                 }))
+                turn_messages = self._turn_transcript_messages(history, user_message, result) if isinstance(result, dict) else []
                 await queue.put(_event_payload("run.completed", {
                     "session_id": effective_session_id,
                     "message_id": message_id,
                     "completed": bool(result.get("completed", True)) if isinstance(result, dict) else True,
+                    "messages": turn_messages,
                     "usage": usage,
                 }))
             except Exception as exc:
@@ -3235,6 +3237,188 @@ class APIServerAdapter(BasePlatformAdapter):
             headers=headers,
         )
 
+    async def _handle_session_chat_stream(self, request: "web.Request") -> "web.StreamResponse":
+        """POST /api/sessions/{session_id}/chat/stream — stream a session chat turn over SSE.
+
+        This composes the upstream session-API streaming contract (multimodal
+        payload normalization, _run_agent patchability, session-key headers)
+        with the HermesOS fork's gateway approval notifications.
+        """
+        auth_err = self._check_auth(request)
+        if auth_err:
+            return auth_err
+        gateway_session_key, key_err = self._parse_session_key_header(request)
+        if key_err is not None:
+            return key_err
+
+        session_id = request.match_info["session_id"]
+        db = self._get_session_db()
+        session = self._normalize_session_record(db.get_session(session_id))
+        if session is None:
+            db.ensure_session(session_id, source="web")
+            session = self._normalize_session_record(db.get_session(session_id)) or {}
+
+        body, err = await self._read_json_body(request)
+        if err:
+            return err
+        user_message, err = _session_chat_user_message(body)
+        if err is not None:
+            return err
+        system_prompt = body.get("system_message") or body.get("instructions")
+        if system_prompt is not None and not isinstance(system_prompt, str):
+            return web.json_response(_openai_error("system_message must be a string", code="invalid_system_message"), status=400)
+
+        loop = asyncio.get_running_loop()
+        queue: "asyncio.Queue[Optional[tuple[str, Dict[str, Any]]]]" = asyncio.Queue()
+        message_id = f"msg_{uuid.uuid4().hex}"
+        run_id = f"run_{uuid.uuid4().hex}"
+        seq = 0
+
+        def _event_payload(name: str, payload: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
+            nonlocal seq
+            seq += 1
+            payload.setdefault("session_id", session_id)
+            payload.setdefault("run_id", run_id)
+            payload.setdefault("seq", seq)
+            payload.setdefault("ts", time.time())
+            return name, payload
+
+        def _enqueue(name: str, payload: Dict[str, Any]) -> None:
+            event = _event_payload(name, payload)
+            try:
+                running_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                running_loop = None
+            try:
+                if running_loop is loop:
+                    queue.put_nowait(event)
+                else:
+                    loop.call_soon_threadsafe(queue.put_nowait, event)
+            except RuntimeError:
+                pass
+
+        def _delta(delta: str) -> None:
+            if delta:
+                _enqueue("assistant.delta", {"message_id": message_id, "delta": delta})
+
+        def _tool_progress(event_type: str, tool_name: str = None, preview: str = None, args=None, **kwargs) -> None:
+            if event_type == "reasoning.available":
+                _enqueue("tool.progress", {"message_id": message_id, "tool_name": tool_name or "_thinking", "delta": preview or ""})
+            elif event_type in {"tool.started", "tool.completed", "tool.failed"}:
+                _enqueue(event_type, {"message_id": message_id, "tool_name": tool_name, "preview": preview, "args": args})
+            elif event_type == "_thinking":
+                _enqueue("tool.progress", {"message_id": message_id, "tool_name": "_thinking", "delta": preview or ""})
+
+        def _on_approval_request(approval_data):
+            if not isinstance(approval_data, dict):
+                approval_data = {"description": str(approval_data)}
+            payload = {
+                "message_id": message_id,
+                "approval_id": str(approval_data.get("approval_id") or approval_data.get("id") or ""),
+                "command": str(approval_data.get("command") or "")[:8000],
+                "description": str(approval_data.get("description") or "Command approval required")[:1000],
+                "pattern_key": str(approval_data.get("pattern_key") or ""),
+                "pattern_keys": approval_data.get("pattern_keys") if isinstance(approval_data.get("pattern_keys"), list) else [],
+            }
+            _enqueue("approval", payload)
+
+        async def _run_and_signal() -> None:
+            unregister_gateway_notify = None
+            try:
+                from tools.approval import (
+                    register_gateway_notify,
+                    unregister_gateway_notify as _unregister_gateway_notify,
+                )
+                register_gateway_notify(session_id, _on_approval_request)
+                unregister_gateway_notify = _unregister_gateway_notify
+            except Exception as exc:
+                logger.debug("[chat/stream] Approval callbacks unavailable: %s", exc)
+
+            try:
+                await queue.put(_event_payload("session.created", {"title": session.get("title") or "New Chat"}))
+                await queue.put(_event_payload("run.started", {"user_message": {"role": "user", "content": user_message}}))
+                await queue.put(_event_payload("message.started", {"message": {"id": message_id, "role": "assistant"}}))
+                history = self._conversation_history_for_session(session_id)
+                result, usage = await self._run_agent(
+                    user_message=user_message,
+                    conversation_history=history,
+                    ephemeral_system_prompt=system_prompt,
+                    session_id=session_id,
+                    stream_delta_callback=_delta,
+                    tool_progress_callback=_tool_progress,
+                    gateway_session_key=gateway_session_key,
+                )
+                final_response = result.get("final_response", "") if isinstance(result, dict) else ""
+                effective_session_id = result.get("session_id", session_id) if isinstance(result, dict) else session_id
+                await queue.put(_event_payload("assistant.completed", {
+                    "session_id": effective_session_id,
+                    "message_id": message_id,
+                    "content": final_response,
+                    "completed": bool(result.get("completed", True)) if isinstance(result, dict) else True,
+                    "partial": bool(result.get("partial", False)) if isinstance(result, dict) else False,
+                    "interrupted": bool(result.get("interrupted", False)) if isinstance(result, dict) else False,
+                }))
+                turn_messages = self._turn_transcript_messages(history, user_message, result) if isinstance(result, dict) else []
+                await queue.put(_event_payload("run.completed", {
+                    "session_id": effective_session_id,
+                    "message_id": message_id,
+                    "completed": bool(result.get("completed", True)) if isinstance(result, dict) else True,
+                    "messages": turn_messages,
+                    "usage": usage,
+                }))
+            except Exception as exc:
+                logger.exception("[api_server] session chat stream failed")
+                await queue.put(_event_payload("error", {"message": str(exc)}))
+            finally:
+                if unregister_gateway_notify is not None:
+                    try:
+                        unregister_gateway_notify(session_id)
+                    except Exception as exc:
+                        logger.debug("[chat/stream] Approval callback cleanup failed: %s", exc)
+                await queue.put(_event_payload("done", {}))
+                await queue.put(None)
+
+        task = asyncio.create_task(_run_and_signal())
+        try:
+            self._background_tasks.add(task)
+        except TypeError:
+            pass
+        if hasattr(task, "add_done_callback"):
+            task.add_done_callback(self._background_tasks.discard)
+
+        headers = {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            "X-Hermes-Session-Id": session_id,
+        }
+        if gateway_session_key:
+            headers["X-Hermes-Session-Key"] = gateway_session_key
+        origin = request.headers.get("Origin", "")
+        cors = self._cors_headers_for_origin(origin) if origin else None
+        if cors:
+            headers.update(cors)
+
+        response = web.StreamResponse(status=200, headers=headers)
+        await response.prepare(request)
+        try:
+            while True:
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=CHAT_COMPLETIONS_SSE_KEEPALIVE_SECONDS)
+                except asyncio.TimeoutError:
+                    await response.write(b": keepalive\n\n")
+                    continue
+                if item is None:
+                    break
+                name, payload = item
+                await response.write(f"event: {name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8"))
+        except (asyncio.CancelledError, ConnectionResetError, ConnectionAbortedError, BrokenPipeError, OSError):
+            task.cancel()
+            raise
+        except Exception as exc:
+            logger.debug("[api_server] session SSE stream error: %s", exc)
+        return response
 
     async def _handle_chat_completions(self, request: "web.Request") -> "web.Response":
         """POST /v1/chat/completions — OpenAI Chat Completions format."""
@@ -4923,6 +5107,44 @@ class APIServerAdapter(BasePlatformAdapter):
         if prior and agent_messages[:len(prior)] == prior:
             return len(prior)
         return 0
+
+    @classmethod
+    def _turn_transcript_messages(
+        cls,
+        conversation_history: List[Dict[str, Any]],
+        user_message: Any,
+        result: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        """Return this turn's assistant/tool messages in client-safe shape.
+
+        The streaming SSE contract delivers all assistant text as
+        ``assistant.delta`` events under one ``message_id`` interleaved with
+        ``tool.*`` events, and a single ``assistant.completed`` carrying only
+        the final reply.  A client that accumulates deltas into one buffer
+        cannot reconstruct *intermediate* assistant text segments that preceded
+        tool calls — so when the page is re-opened mid/post-stream those
+        segments appear lost, even though state.db persisted them correctly.
+
+        Emitting the authoritative per-turn transcript on ``run.completed`` lets
+        any SSE consumer reconcile its live view against ground truth without a
+        separate ``GET /messages`` round-trip.  Purely additive: clients that
+        ignore the field are unaffected.  Refs #34703.
+        """
+        agent_messages = result.get("messages") if isinstance(result, dict) else None
+        if not isinstance(agent_messages, list) or not agent_messages:
+            return []
+        start = cls._response_messages_turn_start_index(
+            conversation_history, user_message, result
+        )
+        turn = agent_messages[start:]
+        out: List[Dict[str, Any]] = []
+        for msg in turn:
+            if not isinstance(msg, dict):
+                continue
+            if msg.get("role") not in {"assistant", "tool"}:
+                continue
+            out.append(cls._message_response(msg))
+        return out
 
     @staticmethod
     def _extract_output_items(result: Dict[str, Any], start_index: int = 0) -> List[Dict[str, Any]]:
