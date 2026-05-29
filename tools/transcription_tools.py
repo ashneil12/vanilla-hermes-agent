@@ -38,7 +38,11 @@ from urllib.parse import urljoin
 
 from utils import is_truthy_value
 from tools.managed_tool_gateway import resolve_managed_tool_gateway
-from tools.tool_backend_helpers import managed_nous_tools_enabled, resolve_openai_audio_api_key
+from tools.tool_backend_helpers import (
+    managed_nous_tools_enabled,
+    nous_tool_gateway_unavailable_message,
+    resolve_openai_audio_api_key,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -200,16 +204,23 @@ def _normalize_local_command_model(model_name: Optional[str]) -> str:
 def _auto_detect_cloud_stt() -> str:
     """First available cloud STT provider by key presence.
 
-    Order: groq (free tier) > openai > venice > xai. Returns ``"none"`` when no
-    cloud key is configured. Used both for auto-detect and as a graceful
-    fallback when a configured local backend (faster-whisper / whisper binary)
-    isn't installed — so voice transcription still works (e.g. Telegram voice
-    messages) instead of silently failing.
+    Order: groq (free tier) > openai > mistral > venice > xai. Returns
+    ``"none"`` when no cloud key is configured. Used both for auto-detect and
+    as a graceful fallback when a configured local backend (faster-whisper /
+    whisper binary) isn't installed — so voice transcription still works (e.g.
+    Telegram voice messages) instead of silently failing.
     """
     if _HAS_OPENAI and get_env_value("GROQ_API_KEY"):
         return "groq"
     if _HAS_OPENAI and _has_openai_audio_backend():
         return "openai"
+    # Only auto-select Mistral if the SDK is already present — don't trigger a
+    # lazy-install during passive auto-detection. Explicit `provider: mistral`
+    # does lazy-install on first transcription call.
+    if _HAS_MISTRAL and get_env_value("MISTRAL_API_KEY"):
+        return "mistral"
+    # hermes-fork: Venice is part of the managed multi-modal stack and remains
+    # preferred over xAI when both cloud keys are present.
     if os.environ.get("VENICE_API_KEY", "").strip():
         return "venice"
     try:
@@ -779,14 +790,14 @@ def _get_provider(stt_config: dict) -> str:
                 return "local"
             if _has_local_command():
                 return "local_command"
-            # Try lazy-install before giving up (upstream): an explicit local
-            # choice can self-heal if faster-whisper installs on demand.
+            # Try lazy-install before giving up (upstream)
             if _try_lazy_install_stt():
                 return "local"
-            # GH-1774: an explicit `local` choice is authoritative — never
-            # silently swap in a cloud provider (the user opted into on-device
-            # transcription for privacy/cost). Auto mode (no provider set) still
-            # picks an available cloud provider, including Venice.
+            # GH-1774 (hermes-fork): if lazy-install also fails, an explicit
+            # `local` choice is authoritative — never silently swap in a cloud
+            # provider (the user opted into on-device transcription for
+            # privacy/cost). Auto mode (no provider set) still picks an
+            # available cloud provider, including Venice.
             logger.warning(
                 "STT provider 'local' configured but unavailable "
                 "(install faster-whisper or set HERMES_LOCAL_STT_COMMAND)"
@@ -821,16 +832,11 @@ def _get_provider(stt_config: dict) -> str:
             return "none"
 
         if provider == "mistral":
-            # `mistralai` PyPI package was quarantined on 2026-05-12 after a
-            # malicious 2.4.6 release. Refuse to use this provider until it's
-            # available again so we surface a clear message instead of an
-            # opaque ImportError mid-call.
+            if _HAS_MISTRAL and get_env_value("MISTRAL_API_KEY"):
+                return "mistral"
             logger.warning(
-                "STT provider 'mistral' (Voxtral Transcribe) is temporarily "
-                "disabled — `mistralai` PyPI package is quarantined "
-                "(malicious 2.4.6 release on 2026-05-12). Falling back to "
-                "another provider. Set stt.provider in config.yaml to 'local' "
-                "or 'openai' to silence this warning."
+                "STT provider 'mistral' configured but mistralai package "
+                "not installed or MISTRAL_API_KEY not set"
             )
             return "none"
 
@@ -854,19 +860,19 @@ def _get_provider(stt_config: dict) -> str:
 
         return provider  # Unknown — let it fail downstream
 
-    # --- Auto-detect (no explicit provider): local > groq > openai > venice > xai ---
-    # mistral is intentionally skipped while `mistralai` is quarantined on
-    # PyPI (malicious 2.4.6 release on 2026-05-12). Venice is preferred over
-    # xAI when both keys are present — it pairs with the rest of the Venice
-    # multi-modal stack (chat / image / video / TTS) under one key.
+    # --- Auto-detect (no explicit provider): local > groq > openai > mistral > venice > xai ---
+    # hermes-fork: upstream's Mistral auto-detect is preserved, and Venice
+    # remains a managed multi-modal fallback before xAI.
 
     if _HAS_FASTER_WHISPER:
         return "local"
     if _has_local_command():
         return "local_command"
-    # Try lazy-install before falling through to cloud providers (upstream):
+    # Try lazy-install before falling through to cloud providers (upstream)
     if _try_lazy_install_stt():
         return "local"
+    # hermes-fork: cloud fallback via _auto_detect_cloud_stt — a superset of
+    # upstream's groq>openai>xai that also includes venice (groq>openai>venice>xai).
     _cloud = _auto_detect_cloud_stt()
     if _cloud != "none":
         logger.info("No local STT available, using %s STT API", _cloud)
@@ -1398,6 +1404,11 @@ def _transcribe_mistral(file_path: str, model_name: str) -> Dict[str, Any]:
         return {"success": False, "transcript": "", "error": "MISTRAL_API_KEY not set"}
 
     try:
+        try:
+            from tools.lazy_deps import ensure as _lazy_ensure
+            _lazy_ensure("stt.mistral", prompt=False)
+        except ImportError:
+            pass
         from mistralai.client import Mistral
 
         with Mistral(api_key=api_key) as client:
@@ -1705,7 +1716,8 @@ def transcribe_audio(file_path: str, model: Optional[str] = None) -> Dict[str, A
         venice_cfg = stt_config.get("venice", {})
         model_name = model or venice_cfg.get("model", DEFAULT_VENICE_STT_MODEL)
         return _transcribe_venice(file_path, model_name)
-# User-declared command-type provider
+
+    # User-declared command-type provider
     # (``stt.providers.<name>: type: command``). Fires after the built-in
     # elif chain — built-in names short-circuit upstream so a user's
     # ``stt.providers.openai.command`` can't override the real OpenAI
@@ -1778,7 +1790,12 @@ def _resolve_openai_audio_client_config() -> tuple[str, str]:
     if managed_gateway is None:
         message = "Neither stt.openai.api_key in config nor VOICE_TOOLS_OPENAI_KEY/OPENAI_API_KEY is set"
         if managed_nous_tools_enabled():
-            message += ", and the managed OpenAI audio gateway is unavailable"
+            message += (
+                ". "
+                + nous_tool_gateway_unavailable_message(
+                    "managed OpenAI audio for transcription",
+                )
+            )
         raise ValueError(message)
 
     return managed_gateway.nous_user_token, urljoin(

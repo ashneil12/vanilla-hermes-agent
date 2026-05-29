@@ -10,19 +10,14 @@ Covers:
 """
 
 import json
-import queue
-import threading
 import time
-from pathlib import Path
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
-import pytest
 
 from plugins.memory.honcho.client import HonchoClientConfig
 from plugins.memory.honcho.session import (
     HonchoSession,
     HonchoSessionManager,
-    _ASYNC_SHUTDOWN,
 )
 
 
@@ -258,8 +253,11 @@ class TestFlushAll:
 
         with patch.object(mgr, "_flush_session") as mock_flush:
             mgr.flush_all()
-            # Called at least once for the queued item
-            assert mock_flush.call_count >= 1
+            # The main thread may drain the queue itself or the background
+            # writer may win the race. Either way, flush_all() must not return
+            # until all queued async writes have reached task_done().
+            assert mgr._async_queue.empty()
+            assert mgr._async_queue.unfinished_tasks == 0
 
     def test_flush_all_tolerates_errors(self):
         mgr = _make_manager(write_frequency="session")
