@@ -52,6 +52,7 @@ AUTHOR_MAP = {
     "batosk2@gmail.com": "Sarbai",  # 2026-05-29 sync
     "sohyuanchin@gmail.com": "wysie",  # 2026-05-29 sync
     "weichangyuwcy@gmail.com": "chyuwei",  # 2026-05-24 sync
+    "drpelagik@gmail.com": "SeaXen",
     "metalclaudbot@gmail.com": "HashClawAI",
     "tonybear55665566@gmail.com": "TonyPepeBear",
     "kaspersniels@gmail.com": "nielskaspers",
@@ -87,6 +88,7 @@ AUTHOR_MAP = {
     "kdkcfp@gmail.com": "slowtokki0409",
     "soliva.johnpaul@icloud.com": "jonpol01",
     "sunil.nitie@gmail.com": "Sunil123135",
+    "wei.chen.coder@gmail.com": "wenchengxucool",
     "frowte3k@gmail.com": "Frowtek",
     "211828103+julio-cloudvisor@users.noreply.github.com": "julio-cloudvisor",
     "17778+kweiner@users.noreply.github.com": "kweiner",
