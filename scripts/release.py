@@ -54,6 +54,7 @@ AUTHOR_MAP = {
     "weichangyuwcy@gmail.com": "chyuwei",  # 2026-05-24 sync
     "zhipengli@thebrainly.ai": "a1245582339",
     "mathijs.vd.hurk@gmail.com": "mathijsvandenhurk",
+    "redpiggy-cyber@users.noreply.github.com": "redpiggy-cyber",  # 2026-05-30 sync
     "drpelagik@gmail.com": "SeaXen",
     "lengr@users.noreply.github.com": "LengR",
     "metalclaudbot@gmail.com": "HashClawAI",
