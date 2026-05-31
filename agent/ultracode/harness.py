@@ -167,7 +167,7 @@ def run(
 
     # --- adversarially verify: independent skeptics, default-to-refuted -------
     if decision.verify and findings:
-        verify_findings(findings, parent_agent=agent, config=cfg, lenses=decision.lenses, delegate_fn=delegate_fn)
+        verify_findings(findings, context=context, parent_agent=agent, config=cfg, lenses=decision.lenses, delegate_fn=delegate_fn)
         stages.append(f"verify({len(decision.lenses)} lenses, quorum {cfg.effective_quorum(len(decision.lenses))})")
         survs = _survivors(findings)
     else:

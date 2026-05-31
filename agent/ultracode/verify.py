@@ -36,10 +36,12 @@ _LENS_BRIEF = {
 }
 
 
-def _skeptic_prompt(finding: Finding, lens: VerifyLens) -> str:
+def _skeptic_prompt(finding: Finding, lens: VerifyLens, context: str = "") -> str:
+    material = f"\nMATERIAL TO CHECK THE CLAIM AGAINST (ground truth — read it, do not guess):\n{context}\n" if context else ""
     return (
         f"You are an adversarial verifier. Your job is to REFUTE the claim below, not to confirm it.\n"
-        f"LENS: {lens.value} — {_LENS_BRIEF.get(lens, 'Attack the claim on its merits.')}\n\n"
+        f"LENS: {lens.value} — {_LENS_BRIEF.get(lens, 'Attack the claim on its merits.')}\n"
+        f"{material}\n"
         f"CLAIM: {finding.claim}\n"
         f"EVIDENCE OFFERED: {finding.evidence or '(none given)'}\n"
         f"LOCATOR: {finding.locator or '(none)'}\n\n"
@@ -78,6 +80,7 @@ def _vote_from_result(entry: Dict[str, Any], lens: VerifyLens) -> VerifierVote:
 def verify_findings(
     findings: List[Finding],
     *,
+    context: str = "",
     parent_agent: Any = None,
     config: Optional[UltracodeConfig] = None,
     lenses: Optional[List[VerifyLens]] = None,
@@ -102,7 +105,7 @@ def verify_findings(
     tasks: List[Dict[str, Any]] = []
     for f in findings:
         for lens in lenses:
-            t: Dict[str, Any] = {"goal": _skeptic_prompt(f, lens)}
+            t: Dict[str, Any] = {"goal": _skeptic_prompt(f, lens, context)}
             if toolsets is not None:
                 t["toolsets"] = list(toolsets)
             tasks.append(t)
