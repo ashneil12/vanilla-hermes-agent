@@ -1,0 +1,189 @@
+"""Tests for the cognitive core: verify, discovery, steering, planner, and the
+full harness.run() — all driven by injected fakes (no live model)."""
+
+import json
+
+from agent.ultracode.config import UltracodeConfig
+from agent.ultracode.discovery import discover
+from agent.ultracode.harness import run
+from agent.ultracode.planner import plan as make_plan
+from agent.ultracode.schema import Finding, OrchestrationShape, Verdict, VerifyLens
+from agent.ultracode.steering import decide
+from agent.ultracode.verify import survivors, verify_findings
+
+
+# ----------------------------- fakes ---------------------------------------
+
+def _delegate_skeptics(verdict_for):
+    """Fake delegate_fn for verifier fan-out: verdict_for(claim) -> 'confirmed'|'refuted'."""
+    def fn(*, tasks, parent_agent, role):
+        results = []
+        for i, t in enumerate(tasks):
+            goal = t["goal"]
+            # the claim is embedded after 'CLAIM: '
+            claim = goal.split("CLAIM:", 1)[1].split("\n", 1)[0].strip() if "CLAIM:" in goal else ""
+            v = verdict_for(claim)
+            body = json.dumps({"verdict": v, "rationale": "because mechanism X"})
+            results.append({"task_index": i, "status": "completed", "summary": body})
+        return json.dumps({"results": results})
+    return fn
+
+
+# ----------------------------- verify --------------------------------------
+
+def test_verify_survival_by_quorum():
+    findings = [Finding(claim="real bug", locator="a:1"), Finding(claim="false alarm", locator="b:2")]
+    fn = _delegate_skeptics(lambda c: "confirmed" if "real" in c else "refuted")
+    verify_findings(findings, config=UltracodeConfig(), delegate_fn=fn)
+    real = next(f for f in findings if "real" in f.claim)
+    false = next(f for f in findings if "false" in f.claim)
+    assert real.survived is True and real.verdict == Verdict.CONFIRMED
+    assert false.survived is False and false.verdict == Verdict.REFUTED
+    assert [f.claim for f in survivors(findings)] == ["real bug"]
+
+
+def test_verify_default_refuted_on_noncompletion():
+    findings = [Finding(claim="x", locator="a:1")]
+
+    def fn(*, tasks, parent_agent, role):
+        # all skeptics fail to complete -> must default to refuted
+        return json.dumps({"results": [{"task_index": i, "status": "timeout", "summary": None} for i in range(len(tasks))]})
+
+    verify_findings(findings, config=UltracodeConfig(), delegate_fn=fn)
+    assert findings[0].survived is False
+    assert all(v.verdict == Verdict.REFUTED for v in findings[0].votes)
+
+
+def test_verify_no_mechanism_downgraded():
+    findings = [Finding(claim="x", locator="a:1")]
+
+    def fn(*, tasks, parent_agent, role):
+        # confirm but with NO rationale -> testimony discipline downgrades to refuted
+        return json.dumps({"results": [{"task_index": i, "status": "completed",
+                                        "summary": json.dumps({"verdict": "confirmed", "rationale": ""})} for i in range(len(tasks))]})
+
+    verify_findings(findings, config=UltracodeConfig(), delegate_fn=fn)
+    assert findings[0].survived is False  # confirmations without mechanism don't count
+
+
+# ----------------------------- discovery -----------------------------------
+
+def test_discovery_loops_until_dry_and_dedups():
+    rounds = [
+        [Finding(claim="a", locator="x:1"), Finding(claim="b", locator="x:2")],
+        [Finding(claim="a", locator="x:1"), Finding(claim="c", locator="x:3")],  # 'a' is dup
+        [],  # dry 1
+        [],  # dry 2 -> stop
+    ]
+
+    def round_fn(i, known):
+        return rounds[i] if i < len(rounds) else []
+
+    rep = discover(round_fn, config=UltracodeConfig(discovery_dry_rounds=2, discovery_max_rounds=10))
+    claims = sorted(f.claim for f in rep.findings)
+    assert claims == ["a", "b", "c"]  # deduped
+    assert rep.fresh_per_round[:4] == [2, 1, 0, 0]
+    assert "dry" in rep.stop_reason
+
+
+# ----------------------------- steering ------------------------------------
+
+def test_steering_stays_solo_on_trivial():
+    d = decide("thanks!", UltracodeConfig())
+    assert d.orchestrate is False
+    assert d.shape == OrchestrationShape.SOLO
+
+
+def test_steering_orchestrates_find_all():
+    d = decide("find all the bugs in this module", UltracodeConfig())
+    assert d.orchestrate is True
+    assert d.shape == OrchestrationShape.LOOP_UNTIL_DRY
+    assert d.loop_until_dry is True
+
+
+def test_steering_force_override():
+    d = decide("say hello", UltracodeConfig(), force_orchestrate=True)
+    assert d.orchestrate is True
+
+
+# ----------------------------- planner -------------------------------------
+
+def test_planner_parses_and_caps():
+    def aux(**kwargs):
+        return json.dumps({"rationale": "by hypothesis", "subtasks": [{"goal": f"h{i}", "context": ""} for i in range(10)]})
+
+    d = decide("debug why the test fails", UltracodeConfig(max_finders=4))
+    p = make_plan("debug why the test fails", d, config=UltracodeConfig(max_finders=4), aux_call_fn=aux)
+    assert len(p.subtasks) == 4  # capped
+    assert any("capped" in c for c in p.caps_announced)
+    assert p.delegated is True
+
+
+def test_planner_scaledown_single_subtask():
+    def aux(**kwargs):
+        return json.dumps({"rationale": "trivial", "subtasks": [{"goal": "just do it"}]})
+
+    d = decide("review this", UltracodeConfig())
+    p = make_plan("review this", d, aux_call_fn=aux)
+    assert len(p.subtasks) == 1
+    assert p.delegated is False  # scale-down gate fired
+
+
+# ----------------------------- harness end-to-end --------------------------
+
+def _make_harness_fakes():
+    """aux_call_fn handles plan/critic/synth; delegate_fn handles finders+skeptics."""
+    def aux(**kwargs):
+        sys = kwargs["messages"][0]["content"].lower()
+        if "planner" in sys:
+            return json.dumps({"rationale": "by lens", "subtasks": [{"goal": "hunt logic bugs"}, {"goal": "hunt security bugs"}]})
+        if "completeness critic" in sys:
+            return json.dumps({"gaps": [], "coverage_note": "looks covered"})
+        if "synthesizer" in sys:
+            return "FINAL: the SQL injection is the load-bearing issue."
+        return "solo answer"
+
+    def delegate(*, tasks, parent_agent, role):
+        results = []
+        for i, t in enumerate(tasks):
+            goal = t["goal"]
+            if "adversarial verifier" in goal:  # skeptic
+                claim = goal.split("CLAIM:", 1)[1].split("\n", 1)[0].strip()
+                v = "confirmed" if "sql" in claim.lower() else "refuted"
+                results.append({"task_index": i, "status": "completed",
+                                "summary": json.dumps({"verdict": v, "rationale": "mech"})})
+            else:  # finder
+                if "security" in goal.lower():
+                    body = {"findings": [{"claim": "SQL injection in query builder", "locator": "db.py:42", "evidence": "unsanitized", "severity": "critical"}]}
+                else:
+                    body = {"findings": [{"claim": "off-by-one maybe", "locator": "loop.py:9", "evidence": "weak", "severity": "low"}]}
+                results.append({"task_index": i, "status": "completed", "summary": json.dumps(body)})
+        return json.dumps({"results": results})
+
+    return aux, delegate
+
+
+def test_harness_end_to_end_ultracode():
+    aux, delegate = _make_harness_fakes()
+    res = run(
+        "find all security and logic bugs in this code",
+        context="<code here>",
+        aux_call_fn=aux, delegate_fn=delegate,
+        config=UltracodeConfig(verify_lenses=[VerifyLens.CORRECTNESS, VerifyLens.SECURITY, VerifyLens.REPRODUCES]),
+        enable_ledger=False,
+    )
+    assert res.mode == "ultracode"
+    assert len(res.findings) >= 2
+    # the SQL injection survives skeptics; the weak off-by-one is refuted
+    surv_claims = [f.claim for f in res.survivors]
+    assert any("SQL" in c for c in surv_claims)
+    assert not any("off-by-one" in c for c in surv_claims)
+    assert "synthesize" in res.stages
+    assert "SQL injection" in res.answer
+
+
+def test_harness_solo_path():
+    aux, delegate = _make_harness_fakes()
+    res = run("hi there", aux_call_fn=aux, delegate_fn=delegate, enable_ledger=False)
+    assert res.mode == "solo"
+    assert res.answer == "solo answer"
