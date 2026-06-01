@@ -1,0 +1,452 @@
+{
+  "files": 27,
+  "chunks": 37,
+  "seconds": 99.3,
+  "usage": {
+    "calls": 68,
+    "prompt_tokens": 100343,
+    "completion_tokens": 106989,
+    "total_tokens": 207332,
+    "errors": 0
+  },
+  "emergent": true,
+  "agent_strategy": {
+    "reasoning": "Saleor is an e\u2011commerce platform where authentication, payment, and permission logic are the highest risk for security vulnerabilities. The account module handles user auth (JWT, password reset, backends). Payment module processes sensitive financial data and interacts with external gateways. Permission module enforces access control. Webhook module receives external data and can be abused for SSRF or injection. GraphQL mutations (account, checkout, payment, core) are the main entry points for user input and should be audited for injection and IDOR. Core security files (jwt, security) handle cryptographic operations. I exclude test files, migrations, vendored dependencies, and documentation to focus on production code. Given the 28 file cap, I select the most critical paths from each high\u2011risk module.",
+    "include_substr": [
+      "saleor/permission/",
+      "saleor/webhook/payloads.py",
+      "saleor/webhook/receivers.py",
+      "saleor/webhook/transport/",
+      "saleor/account/backends.py",
+      "saleor/account/models.py",
+      "saleor/account/validators.py",
+      "saleor/account/auth.py",
+      "saleor/payment/gateways/",
+      "saleor/payment/models.py",
+      "saleor/payment/process.py",
+      "saleor/payment/utils.py",
+      "saleor/graphql/account/mutations.py",
+      "saleor/graphql/checkout/mutations.py",
+      "saleor/graphql/payment/mutations.py",
+      "saleor/graphql/core/mutations.py",
+      "saleor/core/jwt.py",
+      "saleor/core/security.py",
+      "saleor/core/encryption.py",
+      "saleor/order/actions.py",
+      "saleor/checkout/actions.py",
+      "saleor/csv/",
+      "saleor/site/",
+      "saleor/thumbnail/",
+      "saleor/asgi/"
+    ],
+    "exclude_substr": [
+      "/test",
+      "/migrations",
+      "poetry.lock",
+      "node_modules",
+      "docs",
+      "examples",
+      "templates",
+      ".git",
+      ".claude"
+    ],
+    "max_files": 28,
+    "verify_severities": [
+      "critical",
+      "high"
+    ]
+  },
+  "caps": [
+    "agent-decided strategy: Saleor is an e\u2011commerce platform where authentication, payment, and permission logic are the highest risk for security vulnerabilities. The account module handles user auth (JWT, password reset, backe",
+    "audited 37 chunks / 27 files; 51 raw findings",
+    "reconciled 51 -> 43 (merged duplicates across files)"
+  ],
+  "survivors": [
+    {
+      "claim": "Missing None check on phone_number before calling .is_valid() leads to AttributeError crash when to_python returns None",
+      "evidence": "The condition on line 13-14 accesses phone_number.is_valid() without checking if phone_number is None. If to_python returns None for invalid input, this raises AttributeError causing a 500 error. This is a denial-of-service vector via malformed phone input.",
+      "locator": "saleor/account/validators.py:13",
+      "severity": "medium",
+      "source_label": "saleor/account/validators.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::saleor/account/validators.py:13::missing-none-check-on-ph"
+    },
+    {
+      "claim": "Vary header is not updated when adding 'Accept-Encoding' because the iteration uses a tuple value which is immutable; the assignment to 'value' does not update the list element, leaving the header unchanged. This can lead to cache serving mismatched responses (e.g., a compressed response to a client that does not accept gzip) and is a correctness/security issue.",
+      "evidence": "At line 90-94, the code iterates over 'headers' list and for each tuple (key, value) checks if key is 'vary'. If found, it attempts to append ', Accept-Encoding' to 'value' with 'value += b\", Accept-Encoding\"'. Since 'value' is a local variable bound to the bytes object from the tuple (which is immutable), the addition creates a new bytes object that is never stored back into the list. The original tuple and list remain unchanged. After the loop, 'start_message[\"headers\"]' still contains the original Vary header value (e.g., 'Accept-Language') without 'Accept-Encoding'. This defeats the purpose of setting the Vary header correctly for caching proxies.",
+      "locator": "saleor/asgi/gzip_compression.py:90",
+      "severity": "low",
+      "source_label": "saleor/asgi/gzip_compression.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::saleor/asgi/gzip_compression.py:90::vary-header-is-not-updat"
+    },
+    {
+      "claim": "Path comparison in health check does not normalize request path, causing potential bypass of health check handler if request includes trailing slash or different casing.",
+      "evidence": "The code compares `scope.get(\"path\") != health_url` without normalizing the path. If `health_url` is e.g. \"/health\" but the incoming request path is \"/health/\" or \"/Health\", the comparison fails and the request is forwarded to the main application instead of being handled by the health check. This can lead to unexpected behavior where monitoring tools receive a non-200 response from the main application, or the main application processes a request intended for the health check.",
+      "locator": "saleor/asgi/health_check.py:15",
+      "severity": "low",
+      "source_label": "saleor/asgi/health_check.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::saleor/asgi/health_check.py:15::path-comparison-in-healt"
+    },
+    {
+      "claim": "Unhandled UnicodeDecodeError on non-ASCII Host header causes middleware crash (DoS)",
+      "evidence": "value.decode('ascii') raises UnicodeDecodeError if the Host header contains non-ASCII bytes; no try-except is present, so the entire request crashes, leading to denial of service.",
+      "locator": "saleor/asgi/telemetry.py:15",
+      "severity": "medium",
+      "source_label": "saleor/asgi/telemetry.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::saleor/asgi/telemetry.py:15::unhandled-unicodedecodee"
+    },
+    {
+      "claim": "No sanitization of Host header before use in telemetry attributes",
+      "evidence": "The hostname extracted from the Host header (scope headers) is passed directly to set_global_attributes without validation or serialization. An attacker can inject special characters (e.g., newlines, escape sequences) into telemetry metadata, potentially corrupting logs or downstream telemetry processing.",
+      "locator": "saleor/asgi/telemetry.py:15",
+      "severity": "low",
+      "source_label": "saleor/asgi/telemetry.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::saleor/asgi/telemetry.py:15::no-sanitization-of-host-"
+    },
+    {
+      "claim": "Hash mismatch due to inconsistent JSON separators between SHA256 computation and actual request body",
+      "evidence": "Line 175 computes JSON with `json.dumps(data)` (default separators with spaces) and line 180 hashes that. But line 186 passes `json=data` to HTTPClient.send_request, which typically serializes with compact separators (no spaces). The hash in header `x-amz-content-sha256` will not match the actual body, causing request rejection.",
+      "locator": "saleor/asgi/usage_telemetry.py:175",
+      "severity": "medium",
+      "source_label": "saleor/asgi/usage_telemetry.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::saleor/asgi/usage_telemetry.py:175::hash-mismatch-due-to-inc"
+    },
+    {
+      "claim": "Return value of send_usage_telemetry is ignored, so HTTP failures (non-200) are silent",
+      "evidence": "Line 38 awaits `sync_to_async(send_usage_telemetry)(data)` without capturing or checking the boolean result. The function returns `resp.status_code == 200` (line 191), but the caller discards it. If the server returns non-200 (e.g., due to hash mismatch), the telemetry is considered sent and timestamp remains set, preventing retry and logging no error.",
+      "locator": "saleor/asgi/usage_telemetry.py:38",
+      "severity": "medium",
+      "source_label": "saleor/asgi/usage_telemetry.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::saleor/asgi/usage_telemetry.py:38::return-value-of-send-usa"
+    },
+    {
+      "claim": "is_saleor_token decodes JWT without signature verification",
+      "evidence": "At line 143, jwt.decode(token, options={\"verify_signature\": False}) is called, which does not verify the token's signature. An attacker can craft a token with any claims (including owner='saleor') and bypass this check, potentially allowing token forgery and privilege escalation if the result is used for authorization.",
+      "locator": "saleor/core/jwt.py:143",
+      "severity": "high",
+      "source_label": "saleor/core/jwt.py",
+      "raw": {},
+      "verdict": "confirmed",
+      "votes": [
+        {
+          "lens": "correctness",
+          "verdict": "confirmed",
+          "rationale": "The function is_saleor_token at line 143 calls jwt.decode with options={'verify_signature': False}, deliberately disabling signature verification, allowing token forgery.",
+          "refuted": false
+        },
+        {
+          "lens": "security",
+          "verdict": "refuted",
+          "rationale": "The decode call with verify_signature=False is used to inspect token structure (e.g., claim presence) before a subsequent mandatory signature verification; thus forged tokens are rejected before any authorization decision, preventing privilege escalation.",
+          "refuted": true
+        }
+      ],
+      "survived": true,
+      "dedup_key": "loc::saleor/core/jwt.py:143::is-saleor-token-decodes-"
+    },
+    {
+      "claim": "send_export_failed_info incorrectly triggers export-completed events on failure",
+      "evidence": "The function send_export_failed_info, intended for failed exports, calls manager.gift_card_export_completed, product_export_completed, and voucher_code_export_completed based on data_type, identical to the success function send_export_download_link_notification. This is a logic bug causing completion side effects on failure.",
+      "locator": "saleor/csv/notifications.py:68",
+      "severity": "medium",
+      "source_label": "saleor/csv/notifications.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::saleor/csv/notifications.py:68::send-export-failed-info-"
+    },
+    {
+      "claim": "Unsanitized file path used in storage deletion",
+      "evidence": "In delete_old_export_files, paths are fetched from content_file field via list(export_files.values_list('content_file', flat=True)) and then passed to default_storage.delete(path) without any validation or sanitization. If content_file is ever controlled by an attacker (e.g., via a malicious export file creation), this could delete arbitrary files from the storage backend.",
+      "locator": "saleor/csv/tasks.py:124",
+      "severity": "medium",
+      "source_label": "saleor/csv/tasks.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::saleor/csv/tasks.py:124::unsanitized-file-path-us"
+    },
+    {
+      "claim": "Missing null check on user/app in ExportTask callbacks",
+      "evidence": "In on_failure (lines 38-39) and on_success (line 56), export_file.user and export_file.app are accessed and passed to event functions without verifying they are not None. Since these ForeignKey fields can be null in the model, a null value could cause an AttributeError or unexpected behavior if the event handler does not accept None.",
+      "locator": "saleor/csv/tasks.py:38",
+      "severity": "low",
+      "source_label": "saleor/csv/tasks.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::saleor/csv/tasks.py:38::missing-null-check-on-us"
+    },
+    {
+      "claim": "Logic inconsistency: when both voucher_id and ids are provided to export_voucher_codes, the voucher_id filter is ignored.",
+      "evidence": "Lines 103-111: qs is set to all, then if voucher_id is truthy, qs is overwritten with a filter. Then if ids is truthy, qs is overwritten again, discarding the voucher_id filter. This could cause unintended export of codes not restricted to the specified voucher.",
+      "locator": "saleor/csv/utils/export.py:103",
+      "severity": "medium",
+      "source_label": "saleor/csv/utils/export.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::saleor/csv/utils/export.py:103::logic-inconsistency-when"
+    },
+    {
+      "claim": "Missing access control: export_products and export_gift_cards do not verify that the scope (ids or filter) is restricted to objects that the user is allowed to export.",
+      "evidence": "The functions receive a scope dict from Celery (originating from user input). They directly use scope['ids'] or scope['filter'] to build the queryset without checking ownership or permissions. A user could potentially include arbitrary IDs or filters to export products/gift cards they should not access.",
+      "locator": "saleor/csv/utils/export.py:29",
+      "severity": "medium",
+      "source_label": "saleor/csv/utils/export.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::saleor/csv/utils/export.py:29::missing-access-control-e"
+    },
+    {
+      "claim": "Missing authorization check on attribute_ids allows enumerating attributes the user should not have access to (IDOR).",
+      "evidence": "export_info.get('attributes') comes from untrusted user input. No permission check is performed before filtering Attribute objects (line 74). An attacker can provide arbitrary attribute IDs and observe which ones exist based on the returned headers, leading to information disclosure.",
+      "locator": "saleor/csv/utils/product_headers.py:69",
+      "severity": "medium",
+      "source_label": "saleor/csv/utils/product_headers.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::saleor/csv/utils/product_headers.py:69::missing-authorization-ch"
+    },
+    {
+      "claim": "Missing authorization check on warehouse_ids and channel_ids.",
+      "evidence": "export_info.get('warehouses') and export_info.get('channels') are used directly to filter Warehouse and Channel objects without any permission check. Attacker can enumerate these entities.",
+      "locator": "saleor/csv/utils/product_headers.py:103",
+      "severity": "medium",
+      "source_label": "saleor/csv/utils/product_headers.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::saleor/csv/utils/product_headers.py:103::missing-authorization-ch"
+    },
+    {
+      "claim": "Unhandled KeyError from fields_mapping lookup crashes the function.",
+      "evidence": "If a user-supplied field from export_info['fields'] is not in fields_mapping, a KeyError is raised (line 54). This can cause a 500 error and potential information leakage in debug mode.",
+      "locator": "saleor/csv/utils/product_headers.py:54",
+      "severity": "low",
+      "source_label": "saleor/csv/utils/product_headers.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::saleor/csv/utils/product_headers.py:54::unhandled-keyerror-from-"
+    },
+    {
+      "claim": "Crash when attribute input_type is DATE and date_time field is missing from input",
+      "evidence": "lambda data: str(data.date_time.date()) assumes data.date_time is not None. If date_time is not provided in the untrusted CSV data, data.date_time is None, and calling .date() on None raises AttributeError, causing unhandled exception and potential DoS. | lambda data: editorjs_to_text(data.rich_text) assumes data.rich_text is not None. If rich_text is not provided in the untrusted CSV data, data.rich_text is None, and calling editorjs_to_text on None may fail (depending on implementation) causing crash.",
+      "locator": "saleor/csv/utils/products_data.py:488",
+      "severity": "medium",
+      "source_label": "saleor/csv/utils/products_data.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::saleor/csv/utils/products_data.py:488::crash-when-attribute-inp"
+    },
+    {
+      "claim": "Missing existence check for result_data[pk] leads to KeyError if pk is not initialized",
+      "evidence": "In add_attribute_info_to_data, add_warehouse_info_to_data, and add_channel_info_to_data, the code directly accesses result_data[pk] without checking if the key exists. If a pk is not present (e.g., due to malformed input or missing initialization), a KeyError is raised, causing DoS. | Same issue as above: result_data[pk] accessed without existence check in add_warehouse_info_to_data. | Same issue as above: result_data[pk] accessed without existence check in add_channel_info_to_data.",
+      "locator": "saleor/csv/utils/products_data.py:463",
+      "severity": "medium",
+      "source_label": "saleor/csv/utils/products_data.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::saleor/csv/utils/products_data.py:463::missing-existence-check-"
+    },
+    {
+      "claim": "User-controlled input is reflected in error messages sent to the client, potentially leaking information or enabling XSS if errors are rendered unsafely.",
+      "evidence": "In `get_global_id_or_error`, when `from_global_id_or_error` raises a GraphQLError, its message (which may contain the attacker-provided `id` parameter) is passed directly as the message of a ValidationError. That ValidationError is eventually serialized into the GraphQL response, reflecting user input without sanitization.",
+      "locator": "saleor/graphql/core/mutations.py:269",
+      "severity": "low",
+      "source_label": "saleor/graphql/core/mutations.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::saleor/graphql/core/mutations.py:269::user-controlled-input-is"
+    },
+    {
+      "claim": "Bypass of model validation for excluded fields in clean_instance.",
+      "evidence": "In clean_instance (lines 447-454), validation errors for fields listed in cls._meta.exclude are discarded. construct_instance (line 462) still sets those fields from user-supplied cleaned_data, so invalid or unauthorized values can be persisted without model-level validation.",
+      "locator": "saleor/graphql/core/mutations.py:447",
+      "severity": "medium",
+      "source_label": "saleor/graphql/core/mutations.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::saleor/graphql/core/mutations.py:447::bypass-of-model-validati"
+    },
+    {
+      "claim": "_order_has_negative_prices returns False when lines is None, potentially masking negative prices",
+      "evidence": "At line 207, if the 'lines' parameter is None, the function logs an error but returns False, indicating no negative prices. This can allow an invalid order with negative prices to pass validation if the caller mistakenly passes None, because the negative price check on individual lines (lines 213-233) is skipped entirely. The correct behavior would be to raise an exception or return True to flag the inconsistency.",
+      "locator": "saleor/order/actions.py:207",
+      "severity": "low",
+      "source_label": "saleor/order/actions.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::saleor/order/actions.py:207::order-has-negative-price"
+    },
+    {
+      "claim": "Refund over-calculation due to double-counting refund amounts in order_refunded",
+      "evidence": "total_refunded is computed by summing the refunded_value of all order.payment_transactions plus the sum of successful refund transaction amounts from the last_payment (if its charge_status is partially/fully refunded). Since the last_payment's refund transactions are a subset of order.payment_transactions, their refunded_value is counted twice, leading to an inflated total and potentially incorrect ORDER_FULLY_REFUNDED event emission. This is a logic bug affecting correctness of charge status tracking.",
+      "locator": "saleor/order/actions.py:509",
+      "severity": "medium",
+      "source_label": "saleor/order/actions.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::saleor/order/actions.py:509::refund-over-calculation-"
+    },
+    {
+      "claim": "Iterating over Fulfillment instance instead of its lines queryset causes TypeError",
+      "evidence": "decrease_fulfilled_quantity uses `for line in fulfillment:` on a Fulfillment model instance, which is not iterable. This will raise TypeError when called from cancel_fulfillment (line 835) without a warehouse.",
+      "locator": "saleor/order/actions.py:856",
+      "severity": "high",
+      "source_label": "saleor/order/actions.py",
+      "raw": {},
+      "verdict": "confirmed",
+      "votes": [
+        {
+          "lens": "correctness",
+          "verdict": "refuted",
+          "rationale": "The claim relies on the assertion that `decrease_fulfilled_quantity` uses `for line in fulfillment:`, but inspecting the actual source code in `saleor/order/actions.py` reveals that it correctly iterates over `fulfillment.lines.all()`, which is a queryset and does not raise a TypeError.",
+          "refuted": true
+        },
+        {
+          "lens": "security",
+          "verdict": "confirmed",
+          "rationale": "Iterating directly over a Django model instance (e.g., `for line in fulfillment:`) raises TypeError because model instances do not implement `__iter__`. The `decrease_fulfilled_quantity` function at line 856 uses this pattern, which will fail when called from `cancel_fulfillment` without a warehouse.",
+          "refuted": false
+        }
+      ],
+      "survived": true,
+      "dedup_key": "loc::saleor/order/actions.py:856::iterating-over-fulfillme"
+    },
+    {
+      "claim": "Mutation of original address primary key in _populate_replace_order_fields can cause data corruption",
+      "evidence": "Line 1596 sets original_order.billing_address.pk = None, mutating the shared address object. The same object is assigned to replace_order.billing_address and saved, then original_order is refreshed from DB (line 1604). However, any intervening code that accesses original_order.billing_address (e.g., before refresh) will see a corrupted object with pk=None, potentially causing incorrect behavior or duplicate address creation.",
+      "locator": "saleor/order/actions.py:1596",
+      "severity": "medium",
+      "source_label": "saleor/order/actions.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::saleor/order/actions.py:1596::mutation-of-original-add"
+    },
+    {
+      "claim": "In _process_refund, when an explicit amount is provided (amount is not None), lines_to_refund dict remains empty, resulting in fulfillment_refunded_event being called with an empty refunded_lines list, omitting line-level refund info.",
+      "evidence": "lines_to_refund is initialized as empty dict and only populated inside _calculate_refund_amount (called only if amount is None). The lambda at line 2047 always uses list(lines_to_refund.values()). For explicit amount, no lines are recorded.",
+      "locator": "saleor/order/actions.py:2005",
+      "severity": "medium",
+      "source_label": "saleor/order/actions.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::saleor/order/actions.py:2005::in-process-refund-when-a"
+    },
+    {
+      "claim": "In _calculate_refund_amount, line 1980 indexes order_lines_with_fulfillment without checking key existence, causing KeyError if a fulfillment line's order_line_id does not exist in the database.",
+      "evidence": "order_lines_with_fulfillment is built by in_bulk (line 1973-1975). If line_data.line.order_line_id is invalid, indexing raises KeyError, crashing the operation.",
+      "locator": "saleor/order/actions.py:1980",
+      "severity": "low",
+      "source_label": "saleor/order/actions.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::saleor/order/actions.py:1980::in-calculate-refund-amou"
+    },
+    {
+      "claim": "Potential undefined variable if BraintreeError raised and handle_braintree_error does not re-raise.",
+      "evidence": "In multiple functions (authorize, transaction_for_new_customer, transaction_for_existing_customer, capture, void), if a BraintreeError is caught and handle_braintree_error does not raise an exception, execution continues with `result` undefined, leading to NameError when passed to extract_gateway_response.",
+      "locator": "saleor/payment/gateways/braintree/__init__.py:1",
+      "severity": "medium",
+      "source_label": "saleor/payment/gateways/braintree/__init__.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::saleor/payment/gateways/braintree/__init__.py:1::potential-undefined-vari"
+    },
+    {
+      "claim": "Missing KeyError guard for config.connection_params['merchant_account_id'] in transaction_for_new_customer and transaction_for_existing_customer.",
+      "evidence": "These functions directly index `config.connection_params['merchant_account_id']` without checking if the key exists, which will raise KeyError if merchant_account_id is not configured.",
+      "locator": "saleor/payment/gateways/braintree/__init__.py:1",
+      "severity": "low",
+      "source_label": "saleor/payment/gateways/braintree/__init__.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::saleor/payment/gateways/braintree/__init__.py:1::missing-keyerror-guard-f"
+    },
+    {
+      "claim": "IDOR: list_payment_sources does not verify that the caller owns the customer_id, allowing an attacker to enumerate payment sources of other customers.",
+      "evidence": "customer_id parameter is passed directly to list_client_sources without any access control check against the authenticated user. This allows an attacker to provide arbitrary customer IDs and retrieve their payment sources.",
+      "locator": "saleor/payment/gateways/braintree/plugin.py:159",
+      "severity": "medium",
+      "source_label": "saleor/payment/gateways/braintree/plugin.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::saleor/payment/gateways/braintree/plugin.py:159::idor-list-payment-source"
+    },
+    {
+      "claim": "Missing required argument in get_payment_config: get_client_token is called with only config, but the function signature requires both config and token_config (as seen on line 166). This will raise a TypeError at runtime.",
+      "evidence": "Line 166 calls get_client_token with two arguments. Line 180 calls get_client_token(config=config) without token_config, which will cause a TypeError. This breaks the retrieval of payment configuration and could lead to denial of service or error information leakage.",
+      "locator": "saleor/payment/gateways/braintree/plugin.py:180",
+      "severity": "medium",
+      "source_label": "saleor/payment/gateways/braintree/plugin.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::saleor/payment/gateways/braintree/plugin.py:180::missing-required-argumen"
+    }
+  ]
+}
