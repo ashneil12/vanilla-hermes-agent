@@ -153,10 +153,19 @@ def test_planner_scaledown_single_subtask():
 
 # ----------------------------- harness end-to-end --------------------------
 
-def _make_harness_fakes():
-    """aux_call_fn handles plan/critic/synth; delegate_fn handles finders+skeptics."""
+def _make_harness_fakes(triage_orchestrate=True):
+    """aux_call_fn handles solo-audit/triage/plan/critic/synth; delegate_fn handles finders+skeptics."""
     def aux(**kwargs):
         sys = kwargs["messages"][0]["content"].lower()
+        if "expert auditor" in sys:  # solo audit
+            return json.dumps({"findings": [{"claim": "off-by-one maybe", "locator": "loop.py:9",
+                                             "evidence": "weak", "severity": "low"}],
+                               "answer": "solo: a possible off-by-one"})
+        if "deciding whether to escalate" in sys:  # triage / discernment
+            return json.dumps({"confidence": 0.5 if triage_orchestrate else 0.95,
+                               "stakes": "high" if triage_orchestrate else "low",
+                               "gaps": ["security unchecked"] if triage_orchestrate else [],
+                               "orchestrate": triage_orchestrate, "reason": "test"})
         if "planner" in sys:
             return json.dumps({"rationale": "by lens", "subtasks": [{"goal": "hunt logic bugs"}, {"goal": "hunt security bugs"}]})
         if "completeness critic" in sys:
@@ -209,6 +218,27 @@ def test_harness_solo_path():
     res = run("hi there", aux_call_fn=aux, delegate_fn=delegate, enable_ledger=False)
     assert res.mode == "solo"
     assert res.answer == "solo answer"
+
+
+def test_harness_discernment_stays_solo():
+    # triage says solo suffices -> NO orchestration (the fix for always-full-metal)
+    aux, delegate = _make_harness_fakes(triage_orchestrate=False)
+    res = run("find all security and logic bugs in this code", context="<code>",
+              aux_call_fn=aux, delegate_fn=delegate, enable_ledger=False)
+    assert res.mode == "discerned-solo"
+    assert res.stages == ["solo-audit", "triage:solo"]
+    assert any("stayed solo" in c for c in res.caps_announced)
+
+
+def test_harness_discernment_escalates_when_warranted():
+    # triage says high-stakes/low-confidence -> escalate, seeded by the solo pass
+    aux, delegate = _make_harness_fakes(triage_orchestrate=True)
+    res = run("find all security and logic bugs in this code", context="<code>",
+              aux_call_fn=aux, delegate_fn=delegate, enable_ledger=False,
+              config=UltracodeConfig(verify_lenses=[VerifyLens.CORRECTNESS, VerifyLens.SECURITY, VerifyLens.REPRODUCES]))
+    assert res.mode == "ultracode"
+    assert res.stages[:2] == ["solo-audit", "triage:escalate"]
+    assert any("SQL" in f.claim for f in res.survivors)
 
 
 def test_replan_for_gaps_returns_new_targeted_subtasks():

@@ -26,6 +26,7 @@ from agent.ultracode.ledger import RunLedger
 from agent.ultracode.schema import Finding, StageResult, dedupe_findings
 from agent.ultracode.steering import Decision, decide
 from agent.ultracode.planner import Plan, plan as make_plan, replan_for_gaps
+from agent.ultracode.triage import assess
 from agent.ultracode.verify import survivors as _survivors, verify_findings
 
 
@@ -93,6 +94,39 @@ def _parse_findings(entry: dict, source_label: str) -> List[Finding]:
     return out
 
 
+def _solo_audit(task: str, context: str, *, model, rt, aux_call_fn):
+    """A single thorough pass — the disciplined default the discernment gate
+    decides whether to escalate beyond. Returns (findings, answer)."""
+    text = aux_call(
+        [{"role": "system", "content": "You are an expert auditor. Do a thorough single-pass analysis. "
+          "Be specific and locatable; do not pad with speculation."},
+         {"role": "user", "content": f"{task}\n\nMATERIAL:\n{context}\n\n"
+          'Reply with ONLY JSON: {"findings":[{"claim":"<specific>","locator":"<line/section>",'
+          '"evidence":"<why>","severity":"info|low|medium|high|critical"}], "answer":"<lead-first summary>"}'}],
+        model=model, temperature=0.3, max_tokens=4000, main_runtime=rt, call_fn=aux_call_fn,
+    )
+    parsed = extract_json(text)
+    items = parsed.get("findings", []) if isinstance(parsed, dict) else []
+    findings: List[Finding] = []
+    for it in items:
+        if isinstance(it, dict) and str(it.get("claim", "")).strip():
+            try:
+                findings.append(Finding(
+                    claim=str(it["claim"]).strip(), locator=str(it.get("locator", "")).strip(),
+                    evidence=str(it.get("evidence", "")).strip(),
+                    severity=str(it.get("severity", "info")).strip() or "info", source_label="solo",
+                ).validate())
+            except ValueError:
+                continue
+    answer = (parsed.get("answer") if isinstance(parsed, dict) else None) or (text if isinstance(text, str) else "")
+    return findings, answer
+
+
+def _solo_summary(findings: List[Finding], answer: str) -> str:
+    fs = "\n".join(f"- [{f.severity}] {f.claim} ({f.locator})" for f in findings) or "(no findings)"
+    return f"{answer}\n\nFINDINGS ({len(findings)}):\n{fs}"
+
+
 def run(
     task: str,
     *,
@@ -129,20 +163,47 @@ def run(
             led.event("done", res.summary())
         return res
 
+    # --- DISCERNMENT: solo-first; escalate only if a triage says it would help ---
+    seed_findings: List[Finding] = []
+    pre_stages: List[str] = []
+    if cfg.discernment and force_orchestrate is not True:
+        solo_findings, solo_answer = _solo_audit(task, context, model=model, rt=rt, aux_call_fn=aux_call_fn)
+        tv = assess(task, _solo_summary(solo_findings, solo_answer), context_size=len(context),
+                    aux_call_fn=aux_call_fn, agent=agent, model=model)
+        if led:
+            led.event("triage", {"orchestrate": tv.orchestrate, "confidence": tv.confidence,
+                                  "stakes": tv.stakes, "gaps": tv.gaps, "reason": tv.reason})
+        if not tv.orchestrate:
+            # the disciplined default — a single pass already suffices, so don't
+            # burn the orchestration cost. THIS is the fix for "always full-metal".
+            res = UltracodeResult(
+                task=task, mode="discerned-solo", answer=solo_answer, decision=decision,
+                findings=solo_findings, survivors=solo_findings, stages=["solo-audit", "triage:solo"],
+                caps_announced=[f"discernment: stayed solo (confidence={tv.confidence:.2f}, "
+                                f"stakes={tv.stakes}) — {tv.reason}"],
+            )
+            if led:
+                led.event("done", res.summary())
+            return res
+        seed_findings = solo_findings  # escalating — build ON the solo pass, don't redo it
+        pre_stages = ["solo-audit", "triage:escalate"]
+
     # --- plan (work-list before fan-out) -------------------------------------
     plan = make_plan(task, decision, context="", config=cfg, agent=agent, aux_call_fn=aux_call_fn, model=model)
     caps = list(plan.caps_announced)
+    if seed_findings:
+        caps.append(f"discernment: escalated, seeded orchestration with {len(seed_findings)} solo finding(s)")
     if led:
         led.event("plan", {"n_subtasks": len(plan.subtasks), "delegated": plan.delegated, "rationale": plan.rationale})
 
     # --- find: one finder per subtask, looped-until-dry if the shape says so --
     def finder_round(round_idx: int, known: List[Finding]) -> List[Finding]:
+        known = list(seed_findings) + list(known)  # finders always see the solo pass -> find NEW
         if round_idx == 0 or not cfg.reactive_replan:
             subtasks = plan.subtasks
         else:
             # emergent decomposition: re-DERIVE targeted subtasks from findings-so-far,
-            # rather than re-running the same finders. This is the behavior gap vs. a
-            # real ultracode session — the work-list is a living object.
+            # rather than re-running the same finders. The work-list is a living object.
             summaries = [f"{f.claim} ({f.locator})" for f in known]
             subtasks = replan_for_gaps(task, summaries, context=context, max_subtasks=cfg.max_finders,
                                        aux_call_fn=aux_call_fn, agent=agent, model=model)
@@ -158,15 +219,15 @@ def run(
         return found
 
     if decision.loop_until_dry:
-        report = discover(finder_round, config=cfg)
-        findings = report.findings
+        report = discover(finder_round, config=cfg, seen_keys={f.dedup_key() for f in seed_findings})
+        findings = dedupe_findings(seed_findings + report.findings)
         caps.extend(report.caps_announced)
-        stages = ["plan", f"discover(loop, {report.rounds_run} rounds, {report.stop_reason})"]
+        stages = pre_stages + ["plan", f"discover(loop, {report.rounds_run} rounds, {report.stop_reason})"]
         if led:
             led.event("discovery", {"rounds": report.rounds_run, "fresh_per_round": report.fresh_per_round, "stop": report.stop_reason})
     else:
-        findings = dedupe_findings(finder_round(0, []))
-        stages = ["plan", "find"]
+        findings = dedupe_findings(seed_findings + finder_round(0, []))
+        stages = pre_stages + ["plan", "find"]
 
     if len(findings) > cfg.max_findings:
         caps.append(f"findings capped at max_findings={cfg.max_findings} (announced)")

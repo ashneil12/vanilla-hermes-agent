@@ -55,6 +55,7 @@ class UltracodeConfig:
 
     # -- scale-to-the-ask --
     solo_by_default: bool = True   # restraint: orchestrate only on a real signal
+    discernment: bool = True       # DISCERNMENT: solo-first, escalate to orchestration only if a quick triage says it would materially help (the fix for "always full-metal")
 
     # -- budget (token ceiling; None = no object, but still announced) --
     run_budget_tokens: Optional[int] = None
