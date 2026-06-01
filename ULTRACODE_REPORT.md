@@ -286,6 +286,7 @@ code finding: **orchestration wins at SCALE, not on small/known problems.**
 | trivial factual recall (SOLID, ACID…) | 0.95 | 0.95 | tie — orchestration is pure overhead; route to solo |
 | broad **known-topic** coverage (microservices, appsec; 13–18 rubric pts) | **1.00** | 0.94 | baseline SATURATES — one pass holds it all; orchestration can only match or lose |
 | **corpus exceeds one context** (200 docs ≈ 248k tok, 200 facts) | **0.41** | **1.00** | **orchestration WINS +0.59** — the genuine regime |
+| **same, at scale** (500 docs ≈ 620k tok, 500 facts, 100 chunk-extractors) | **0.16** | **1.00** | **+0.84** — the gap WIDENS with scale |
 
 The corpus result is the load-bearing one. With fabricated facts (so parametric
 knowledge can't shortcut — a fact is recoverable only by READING its chunk), a single
@@ -296,6 +297,12 @@ beyond the baseline's window. Mechanism is identical to repo-scale audit: chunk 
 out → union. **Deep-research orchestration earns its cost precisely when the material
 exceeds what one focused pass can hold** — not when a capable model already knows the
 answer (it saturates a single pass there too, on coverage just as on recall).
+
+Scaled to 500 docs (~620k tokens ≈ a 200–800k-LOC codebase) with 100 parallel
+chunk-extractors, the baseline *degrades* to 0.16 (a fixed window covers an ever-smaller
+slice) while orchestration **holds at 1.00** — the gap WIDENS with scale, and 100 agents
+ran concurrently with correct finding-attribution. This is the research analog of the
+repo-scale code result, confirmed at the same order of magnitude.
 
 ### Agent figures out its OWN method (not a recipe) — and does it BETTER
 
