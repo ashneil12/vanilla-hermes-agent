@@ -27,6 +27,8 @@ class BugTask:
     planted: List[Bug] = field(default_factory=list)
     # how many *spurious* findings we tolerate before precision suffers (informational)
     near_clean: bool = False
+    # informational: the facet decomposition a comprehensive answer should cover (printed, not scored)
+    facets: List[str] = field(default_factory=list)
 
 
 _AUTH = BugTask(

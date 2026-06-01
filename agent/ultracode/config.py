@@ -60,6 +60,11 @@ class UltracodeConfig:
     discernment: bool = True       # DISCERNMENT: solo-first, escalate to orchestration only if a quick triage says it would materially help (the fix for "always full-metal")
     full_orchestration_min_chars: int = 6000  # FULL (loop-until-dry) is reserved for genuinely large find-all work; smaller tasks that warrant orchestration get the cheap LIGHT ensemble
 
+    # -- deep research (research-kind only; defaults preserve code behavior) --
+    research_landscape_synth: bool = True   # organize the answer BY FACET preserving every specific, instead of lead-with-one-result (which collapses the per-facet depth a fan-out paid for)
+    detect_contradictions: bool = True      # surface same-topic opposite-predicate findings as Position-A-vs-B instead of silently merging/dropping
+    research_factcheck_gate: bool = True     # spot-check a round's fresh claims before they seed the next replan (stop false claims founding later rounds)
+
     # -- budget (token ceiling; None = no object, but still announced) --
     run_budget_tokens: Optional[int] = None
 

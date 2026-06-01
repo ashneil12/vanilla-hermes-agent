@@ -65,7 +65,10 @@ _WORKER = {
     ),
     TaskKind.RESEARCH: (
         "Investigate the sub-question and report FACTUAL CLAIMS that answer it. Every claim must carry the "
-        "specific source/evidence it rests on. Do not state anything you cannot support. locator = the source."
+        "specific source/evidence it rests on. Do not state anything you cannot support. locator = the source. "
+        "EXHAUST your sub-question — aim to cover every sub-point a domain expert would expect under this heading; "
+        "a thin 1-2 claim answer means you went shallow. Prefer specifics (names, numbers, bounds, mechanisms, "
+        "canonical example systems) over generalities."
     ),
     TaskKind.ANALYSIS: (
         "Analyze the material and report concrete, evidenced findings/insights — not generic observations. "
@@ -84,6 +87,20 @@ _WORKER = {
 
 def worker_instruction(kind: str) -> str:
     return _WORKER.get(kind, _WORKER[TaskKind.GENERIC])
+
+
+def research_depth_directive(facet: str) -> str:
+    """Per-facet depth mandate for a research finder. The whole point of fanning out
+    is that each worker OWNS one facet and goes DEEP on it — without this, a weak model
+    emits 2 obvious claims and stops, and N finders become N shallow re-answers of the
+    whole question (no coverage gain). This converts parallelism into depth."""
+    return (
+        f"YOUR FACET: {facet}\n"
+        "Go DEEP on THIS facet only — do NOT re-answer the whole question. Aim for >=4 distinct, specific "
+        "sub-points. Gather SPECIFICS: exact names, dates, numbers/bounds, mechanisms, and the canonical "
+        "example system for each claim. Distinguish what is SETTLED (consensus) from CONTESTED (sources "
+        "disagree). Report the LANDSCAPE of your facet, not just the single best fact."
+    )
 
 
 _SKEPTIC = {

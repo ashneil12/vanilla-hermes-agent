@@ -27,7 +27,9 @@ from agent.ultracode.schema import Finding, StageResult, dedupe_findings, reconc
 from agent.ultracode.steering import Decision, decide
 from agent.ultracode.planner import Approach, Plan, plan as make_plan, plan_approach, replan_for_gaps
 from agent.ultracode.triage import assess
-from agent.ultracode.kinds import TaskKind, classify_kind, skeptic_instruction, worker_instruction
+from agent.ultracode.kinds import (
+    TaskKind, classify_kind, research_depth_directive, skeptic_instruction, worker_instruction,
+)
 from agent.ultracode.judge import judge_panel
 from agent.ultracode.verify import survivors as _survivors, verify_findings
 
@@ -277,7 +279,13 @@ def run(
                                        aux_call_fn=aux_call_fn, agent=agent, model=model)
             if not subtasks:
                 return []  # planner declares the surface exhausted -> contributes to dry
-        tasks = [{"goal": _finder_prompt(st.goal, context, st.context, known, worker_directive)} for st in subtasks]
+        # research: give each finder a per-facet DEPTH mandate so the fan-out buys
+        # coverage (each owns one facet, goes deep) instead of N shallow re-answers.
+        def _directive_for(st_goal: str) -> str:
+            if tkind == TaskKind.RESEARCH:
+                return worker_directive + "\n" + research_depth_directive(st_goal)
+            return worker_directive
+        tasks = [{"goal": _finder_prompt(st.goal, context, st.context, known, _directive_for(st.goal))} for st in subtasks]
         results = delegate_fanout(tasks, parent_agent=agent, max_children=cfg.max_children,
                                   concurrency=cfg.concurrency, delegate_fn=delegate_fn)
         found: List[Finding] = []
@@ -345,9 +353,12 @@ def run(
     if led:
         led.event("critic", {"gaps": crit.gaps, "coverage_note": crit.coverage_note, "independent": crit.independent})
 
-    # --- synthesize (solo, non-delegable; lead with load-bearing; keep dissent) ---
-    answer = _synthesize(task, survs, findings, crit_note=crit.coverage_note, model=model, rt=rt, aux_call_fn=aux_call_fn)
-    stages.append("synthesize")
+    # --- synthesize (solo, non-delegable) -- research: landscape-first to keep depth -
+    landscape = tkind == TaskKind.RESEARCH and cfg.research_landscape_synth
+    answer = _synthesize(task, survs, findings, crit_note=crit.coverage_note, model=model, rt=rt,
+                         aux_call_fn=aux_call_fn, landscape=landscape,
+                         synth_directive=(approach.synthesis_directive if approach.ok else ""))
+    stages.append("synthesize-landscape" if landscape else "synthesize")
 
     res = UltracodeResult(
         task=task, mode=("discerned-light" if light else "ultracode"), answer=answer, decision=decision, plan=plan,
@@ -358,25 +369,48 @@ def run(
     return res
 
 
-def _synthesize(task, survivors, all_findings, *, crit_note, model, rt, aux_call_fn) -> str:
+def _synthesize(task, survivors, all_findings, *, crit_note, model, rt, aux_call_fn,
+                landscape=False, synth_directive="") -> str:
     refuted = [f for f in all_findings if f not in survivors]
     surv_block = "\n".join(
         f"- [{f.severity}] {f.claim} ({f.locator}) — survived {sum(1 for v in f.votes if v.verdict.value=='confirmed')}/{len(f.votes)} skeptics"
         for f in survivors
     ) or "(no findings survived verification)"
     dissent = "\n".join(f"- {f.claim} ({f.locator})" for f in refuted[:10]) or "(none)"
+    extra = ("\nADDITIONAL GUIDANCE (supplementary — the structure above always wins): " + synth_directive
+             if synth_directive.strip() else "")
+    if landscape:
+        # DEEP RESEARCH: lead-first synthesis is ANTI-depth — it collapses the per-facet
+        # investigation the fan-out paid for into one headline. Organize BY FACET and
+        # preserve every specific, so the depth survives into the answer.
+        sys_prompt = "You are the research synthesizer. Organize by facet; preserve every specific; never summarize a specific into generic prose."
+        instr = (
+            "Write the final research answer. Organize it BY FACET / claim-axis — use the facets implied by the "
+            "findings as section headings, and COVER EVERY facet (if one is thin, say so explicitly; never drop it). "
+            "Under each facet present: (1) SETTLED — consensus findings stated as fact with their source; "
+            "(2) CONTESTED — where sources disagree, give Position A (sources) vs Position B (sources) and which is "
+            "better-supported; (3) UNVERIFIED — claims still under review, hedged. PRESERVE every specific verbatim: "
+            "names, dates, numbers, bounds, mechanisms, example systems — a specific dropped is coverage lost. "
+            "Lead with STRUCTURE (the facet map), not a single fact. Do not pad; do not repeat."
+        ) + extra
+        max_tok = 6000
+    else:
+        sys_prompt = "You are the synthesizer. Ranked, lead-first, calibrated, no padding."
+        instr = (
+            "Write the final answer to the task. Lead with the single most load-bearing result. "
+            "Present only verified findings as fact; clearly hedge anything unverified. "
+            "If a refuted item is the strongest objection to your conclusion, surface it as a minority report. "
+            "Be concrete and ranked; do not pad."
+        ) + extra
+        max_tok = 2500
     user = (
         f"TASK:\n{task}\n\n"
         f"VERIFIED FINDINGS (survived adversarial verification):\n{surv_block}\n\n"
         f"REFUTED/UNVERIFIED (do not present as fact; mention only if load-bearing):\n{dissent}\n\n"
-        f"COMPLETENESS NOTE: {crit_note or '(none)'}\n\n"
-        "Write the final answer to the task. Lead with the single most load-bearing result. "
-        "Present only verified findings as fact; clearly hedge anything unverified. "
-        "If a refuted item is the strongest objection to your conclusion, surface it as a minority report. "
-        "Be concrete and ranked; do not pad."
+        f"COMPLETENESS NOTE: {crit_note or '(none)'}\n\n" + instr
     )
     return aux_call(
-        [{"role": "system", "content": "You are the synthesizer. Ranked, lead-first, calibrated, no padding."},
+        [{"role": "system", "content": sys_prompt},
          {"role": "user", "content": user}],
-        model=model, temperature=0.3, max_tokens=2500, main_runtime=rt, call_fn=aux_call_fn,
+        model=model, temperature=0.3, max_tokens=max_tok, main_runtime=rt, call_fn=aux_call_fn,
     )
