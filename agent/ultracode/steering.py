@@ -30,7 +30,12 @@ class TurnClass:
 
 # Signal vocabularies — the "tells" the doctrine reads. Kept small and honest;
 # the planner refines. Each maps a tell to a shape bias.
-_FIND_ALL = re.compile(r"\b(all|every|each|exhaustive|enumerate|find every|list all)\b", re.I)
+# Enumeration INTENT, not incidental quantifiers: bare "all"/"each" match ordinary
+# prose ("explain what each means", "all of this") and spuriously triggered a
+# loop-until-dry shape on closed-form questions. Require a real find-all phrasing.
+_FIND_ALL = re.compile(
+    r"\b(find all|list all|all the|every\s+\w+|each of|enumerate|exhaustive|find every|all instances|all occurrences)\b",
+    re.I)
 _DEBUG = re.compile(r"\b(bug|broken|fails?|failing|crash|error|why does|root cause|regress)\b", re.I)
 _AUDIT = re.compile(r"\b(review|audit|vulnerab|security|inspect|check the|analy[sz]e)\b", re.I)
 _DESIGN = re.compile(r"\b(design|architecture|approach|should we|vs\.?|tradeoff|choose|which)\b", re.I)
