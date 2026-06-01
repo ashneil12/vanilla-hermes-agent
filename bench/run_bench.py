@@ -25,8 +25,9 @@ from bench.tasks import ALL_TASKS, total_planted
 def _cfg() -> UltracodeConfig:
     return UltracodeConfig(
         verify_lenses=[VerifyLens.CORRECTNESS, VerifyLens.SECURITY, VerifyLens.REPRODUCES],
-        max_finders=3, max_children=8, verify_quorum=2,
-        discovery_dry_rounds=2, discovery_max_rounds=2,
+        max_finders=4, max_children=8, verify_quorum=2, concurrency=24,
+        discovery_dry_rounds=2, discovery_max_rounds=3,
+        reactive_replan=True, voi_verify=True,
     )
 
 
@@ -63,7 +64,7 @@ def main():
               f"spurious={bs.spurious} | {bu['total_tokens']}tok {bt:.0f}s", flush=True)
 
         # --- ultracode ---
-        cu = DeepSeekClient(model=args.model)
+        cu = DeepSeekClient(model=args.model, max_workers=24)  # scale: many skeptics in flight
         t0 = time.time()
         res = ultracode_run(
             task.prompt, context=task.code,
