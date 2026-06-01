@@ -55,6 +55,13 @@ _DEFAULT_EXCLUDE = (
 )
 
 
+def _pruned_dir(dirname: str, exclude_substr: Tuple[str, ...]) -> bool:
+    """True if a directory should be skipped entirely during the walk (speed:
+    avoids crawling .venv/.git/node_modules on huge repos)."""
+    seg = "/" + dirname + "/"
+    return any(seg in x or x in seg for x in exclude_substr)
+
+
 def chunk_repo(
     root: str,
     *,
@@ -67,7 +74,8 @@ def chunk_repo(
 ) -> List[Chunk]:
     """Walk ``root`` and produce chunks (a big file becomes several)."""
     paths: List[str] = []
-    for dirpath, _dirs, files in os.walk(root):
+    for dirpath, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if not _pruned_dir(d, exclude_substr)]
         for fn in files:
             if not fn.endswith(ext):
                 continue
@@ -202,7 +210,8 @@ def repo_overview(root: str, *, ext: str = ".py", exclude_substr: Tuple[str, ...
     file counts, and total LOC — the cheap reconnaissance that authorizes a plan."""
     by_dir: dict = {}
     total_files = total_loc = 0
-    for dirpath, _dirs, files in os.walk(root):
+    for dirpath, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if not _pruned_dir(d, exclude_substr)]
         for fn in files:
             if not fn.endswith(ext):
                 continue
