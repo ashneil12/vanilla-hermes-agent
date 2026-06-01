@@ -246,6 +246,14 @@ def run(
     if led:
         led.stage(StageResult(stage="verify", findings=findings))
 
+    # --- ground-truth-once: RUN a repro to confirm survivors (opt-in) --------
+    if cfg.execution_verify and survs and context:
+        from agent.ultracode.groundtruth import ground_truth_pass
+        n_confirmed = ground_truth_pass(survs, context, aux_call_fn=aux_call_fn, agent=agent, model=model)
+        stages.append(f"ground-truth(ran repros; {n_confirmed} confirmed by execution)")
+        if led:
+            led.event("ground_truth", {"confirmed_by_execution": n_confirmed, "checked": len(survs)})
+
     # --- completeness critic (gaps surfaced, never silently dropped) ---------
     crit = completeness_critic(task, findings, caps_announced=caps, agent=agent, aux_call_fn=aux_call_fn, model=model)
     if crit.gaps:

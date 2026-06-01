@@ -43,6 +43,7 @@ class UltracodeConfig:
     verify_quorum: int = 2         # votes-to-survive out of len(lenses)
     verify_default_refuted: bool = True  # the stance: uncertain -> refuted
     voi_verify: bool = True        # VOI triage: concentrate lenses where being wrong is costly (critical/high -> all, medium -> 2, low/info -> 1) — conservation of rigor, and a big cost cut at scale
+    execution_verify: bool = False # ground-truth-once: RUN a repro to confirm findings (the only true exit from the closed loop). OFF by default — runs model-generated code; enable only for trusted/benchmark targets or behind a real sandbox
 
     # -- loop-until-dry discovery --
     discovery_max_rounds: int = 6
