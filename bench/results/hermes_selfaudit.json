@@ -1,0 +1,610 @@
+{
+  "files": 17,
+  "chunks": 62,
+  "seconds": 157.0,
+  "usage": {
+    "calls": 119,
+    "prompt_tokens": 292020,
+    "completion_tokens": 244742,
+    "total_tokens": 536762,
+    "errors": 0
+  },
+  "emergent": true,
+  "agent_strategy": {
+    "reasoning": "",
+    "include_substr": [],
+    "exclude_substr": [],
+    "max_files": 20,
+    "verify_severities": [
+      "critical",
+      "high"
+    ]
+  },
+  "caps": [
+    "agent-decided strategy: ",
+    "audited 62 chunks / 17 files; 69 raw findings",
+    "reconciled 69 -> 68 (merged duplicates across files)"
+  ],
+  "survivors": [
+    {
+      "claim": "Thread-unsafe use of itertools.count for generating per-request IDs causes a race condition when the callback is invoked concurrently from multiple threads, leading to duplicate tool_call_id values.",
+      "evidence": "_PERMISSION_REQUEST_IDS = count(1) (line 29) is not thread-safe. The callback in make_approval_callback is likely called from Hermes worker threads, and next(_PERMISSION_REQUEST_IDS) (line 82) is invoked before scheduling the coroutine on the event loop. Concurrent calls can produce identical IDs, breaking the intended uniqueness of tool_call_id.",
+      "locator": "acp_adapter/permissions.py:82",
+      "severity": "medium",
+      "source_label": "acp_adapter/permissions.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::acp_adapter/permissions.py:82::thread-unsafe-use-of-ite"
+    },
+    {
+      "claim": "User-controlled 'command' and 'description' strings are directly interpolated into the ACP tool call's title and content without sanitization, creating a potential injection vector if the ACP SDK or downstream processing interprets these strings as commands, code, or display markup.",
+      "evidence": "In _build_permission_tool_call, lines 83-91, 'command' and 'description' (both from external callback arguments) are used in f-strings for title, content_text, and raw_input. No escaping or validation is applied. If ACP SDK renders these in a privileged context or logs them unsafely, an attacker can inject arbitrary content.",
+      "locator": "acp_adapter/permissions.py:83",
+      "severity": "medium",
+      "source_label": "acp_adapter/permissions.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::acp_adapter/permissions.py:83::user-controlled-command-"
+    },
+    {
+      "claim": "Null byte injection in path construction from URI",
+      "evidence": "In _path_from_file_uri, the URI path is decoded using urllib.parse.unquote (lines 167, 169). An attacker can encode a null byte as %00 in the URI, which unquote will decode to a literal null byte. When the resulting string is passed to Path() and subsequently used in file operations, the null byte may truncate the path on some operating systems (e.g., C libraries treat null as string terminator), allowing access to unintended files.",
+      "locator": "acp_adapter/server.py:167",
+      "severity": "medium",
+      "source_label": "acp_adapter/server.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::acp_adapter/server.py:167::null-byte-injection-in-p"
+    },
+    {
+      "claim": "Unvalidated URI in image block conversion can lead to SSRF when passed to OpenAI API",
+      "evidence": "_image_block_to_openai_part (line 387) assigns `url = uri` directly from `block.uri` without any scheme or host validation. This URI is later returned as part of an OpenAI image_url content part. OpenAI's API will fetch the URL, enabling an attacker who controls the ACP prompt (e.g., via malicious client input) to probe internal or cloud metadata endpoints.",
+      "locator": "acp_adapter/server.py:387",
+      "severity": "high",
+      "source_label": "acp_adapter/server.py",
+      "raw": {},
+      "verdict": "confirmed",
+      "votes": [
+        {
+          "lens": "correctness",
+          "verdict": "confirmed",
+          "rationale": "The code assigns `url = uri` from `block.uri` without any scheme or host validation (line 387), and this URL is included in the OpenAI API image_url content part. OpenAI's API will fetch the URL, so a malicious client-controlled URI can target internal or cloud metadata endpoints, enabling server-side request forgery.",
+          "refuted": false
+        },
+        {
+          "lens": "security",
+          "verdict": "refuted",
+          "rationale": "The claim assumes the URI from `block.uri` is attacker-controlled, but in practice the block's URI is validated earlier (e.g., only data: or allowlisted schemes accepted) before reaching `_image_block_to_openai_part`. Thus, the direct assignment does not enable SSRF because the input is already sanitized.",
+          "refuted": true
+        }
+      ],
+      "survived": true,
+      "dedup_key": "loc::acp_adapter/server.py:387::unvalidated-uri-in-image"
+    },
+    {
+      "claim": "Unvalidated data field in image block can be used to inject arbitrary content into a data URL",
+      "evidence": "_image_block_to_openai_part (line 385) constructs a data URL as `f'data:{mime_type};base64,{data}'` if `data` does not start with 'data:'. There is no verification that `data` is valid base64 or that the resulting data URL is safe. An attacker could supply arbitrary text (e.g., a URL or script) that gets embedded in the data URL, potentially leading to content injection or unexpected behavior in downstream consumers.",
+      "locator": "acp_adapter/server.py:385",
+      "severity": "medium",
+      "source_label": "acp_adapter/server.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::acp_adapter/server.py:385::unvalidated-data-field-i"
+    },
+    {
+      "claim": "Untrusted environment variable injection in MCP server config",
+      "evidence": "Environment variables for stdio servers are constructed from client-supplied `env` items at line 769 without sanitization. An attacker can inject arbitrary environment variables, potentially influencing the behavior of spawned subprocesses or leaking secrets.",
+      "locator": "acp_adapter/server.py:769",
+      "severity": "medium",
+      "source_label": "acp_adapter/server.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::acp_adapter/server.py:769::untrusted-environment-va"
+    },
+    {
+      "claim": "Missing authorization check allows any caller to change the mode of any session via `set_session_mode`. An attacker can alter the editor mode to bypass edit-approval policies.",
+      "evidence": "The method accepts `session_id` and `mode_id` from an external ACP request, retrieves the session, and sets a normalized mode on it without any access-control check. The caller is not validated against the session owner.",
+      "locator": "acp_adapter/server.py:1912",
+      "severity": "medium",
+      "source_label": "acp_adapter/server.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::acp_adapter/server.py:1912::missing-authorization-ch"
+    },
+    {
+      "claim": "Missing authorization check allows any caller to set arbitrary configuration options on any session via `set_config_option`. This includes editing the mode and storing arbitrary key-value pairs without permission.",
+      "evidence": "The method takes `config_id`, `session_id`, and `value` from the caller, retrieves the session, and directly mutates it (either setting mode or storing a config option) without verifying the caller\u2019s identity or authorization for that session.",
+      "locator": "acp_adapter/server.py:1928",
+      "severity": "medium",
+      "source_label": "acp_adapter/server.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::acp_adapter/server.py:1928::missing-authorization-ch"
+    },
+    {
+      "claim": "Exception details are returned to the user in `_cmd_compact`, leading to information disclosure.",
+      "evidence": "In the except block, the raw exception is converted to a string and returned as the command response (e.g., `return f\"Compression failed: {e}\"`). This can leak internal stack traces or sensitive state information to the caller.",
+      "locator": "acp_adapter/server.py:1842",
+      "severity": "low",
+      "source_label": "acp_adapter/server.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::acp_adapter/server.py:1842::exception-details-are-re"
+    },
+    {
+      "claim": "Server-Side Request Forgery (SSRF) via attacker-controlled base_url",
+      "evidence": "In _make_agent (line 614), the base_url parameter is taken from session metadata (restored from DB via _restore line 509) without validation or sanitization. This value originates from user-controlled session data (e.g., via ACP API) and is stored in model_config (lines 441-442). When the session is used, this base_url is passed directly to AIAgent as the API endpoint, allowing an attacker to make HTTP requests to arbitrary internal or external hosts.",
+      "locator": "acp_adapter/session.py:614",
+      "severity": "medium",
+      "source_label": "acp_adapter/session.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::acp_adapter/session.py:614::server-side-request-forg"
+    },
+    {
+      "claim": "Path traversal risk in update_cwd due to missing validation after cwd translation",
+      "evidence": "The cwd parameter in update_cwd (line 359) is received from a client request and passed through _translate_acp_cwd (unknown sanitization). The result is assigned to state.cwd (line 363) and used in _register_task_cwd (line 364) for file operations. No further validation (e.g., rejecting path traversal sequences) is performed in this file, potentially allowing an attacker to set an arbitrary working directory.",
+      "locator": "acp_adapter/session.py:359",
+      "severity": "medium",
+      "source_label": "acp_adapter/session.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::acp_adapter/session.py:359::path-traversal-risk-in-u"
+    },
+    {
+      "claim": "Logic inconsistency: provider/base_url stored in model_config but restored from separate billing columns",
+      "evidence": "In _persist (lines 439-444), provider and base_url are stored inside session_meta (JSON in model_config). In _restore (line 499), provider is initially taken from row.get('billing_provider'), and base_url from row.get('billing_base_url') (line 500). Later, these values are overridden by data from model_config (lines 508-509). This dual storage may lead to unexpected restoration behavior if the columns contain different values.",
+      "locator": "acp_adapter/session.py:499",
+      "severity": "low",
+      "source_label": "acp_adapter/session.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::acp_adapter/session.py:499::logic-inconsistency-prov"
+    },
+    {
+      "claim": "Unvalidated path in extract_locations enables path traversal in ToolCallLocation",
+      "evidence": "`path = arguments.get(\"path\")` is directly used in `ToolCallLocation(path=path, line=line)` (L1356) with no sanitization. An attacker can inject `../../secret` as the `path` argument. This location object is returned to the caller and may be used to read or highlight files, leading to information disclosure or IDOR.",
+      "locator": "acp_adapter/tools.py:1353",
+      "severity": "medium",
+      "source_label": "acp_adapter/tools.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::acp_adapter/tools.py:1353::unvalidated-path-in-extr"
+    },
+    {
+      "claim": "Potential IDOR in _fetch_codex_account_usage: account_id set from token data is inserted as ChatGPT-Account-Id header without verification that it matches the authenticated token's scope.",
+      "evidence": "account_id (line 131) is extracted from _read_codex_tokens() (line 129-130) and added to headers as ChatGPT-Account-Id. No check ensures this account_id belongs to the token. An attacker who can modify the token store can impersonate another account to the API.",
+      "locator": "agent/account_usage.py:138",
+      "severity": "medium",
+      "source_label": "agent/account_usage.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::agent/account_usage.py:138::potential-idor-in-fetch-"
+    },
+    {
+      "claim": "API key is partially revealed in the initialization banner, leaking the first 8 and last 4 characters of tokens to console output. This can unintentionally expose secrets in logs or terminal history, especially in shared environments or when verbose logging is enabled.",
+      "evidence": "At lines 662-663, the code prints `print(f\"\ud83d\udd11 Using token: {effective_key[:8]}...{effective_key[-4:]}\")` when `not agent.quiet_mode` and the key length exceeds 12. The printed prefix and suffix leak enough information to assist credential theft.",
+      "locator": "agent/agent_init.py:662",
+      "severity": "low",
+      "source_label": "agent/agent_init.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::agent/agent_init.py:662::api-key-is-partially-rev"
+    },
+    {
+      "claim": "Memory provider initialization passes multiple user-derived attributes (session_id, user_id, etc.) to initialize_all without sanitization, creating an injection surface into the plugin's initialization logic.",
+      "evidence": "line 1140: agent._memory_manager.initialize_all(**_init_kwargs) \u2014 _init_kwargs is built from agent attributes (session_id, platform, hermes_home, user_id, user_name, chat_id, etc.) which may be attacker-influenced. If the memory provider uses these values unsafely (e.g., in file paths or SQL queries), it enables injection attacks.",
+      "locator": "agent/agent_init.py:1140",
+      "severity": "medium",
+      "source_label": "agent/agent_init.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::agent/agent_init.py:1140::memory-provider-initiali"
+    },
+    {
+      "claim": "Debug dump function includes the API key in the dumped payload, risking secret exposure in logs or files.",
+      "evidence": "Lines 1040-1042 extract `api_key` from `agent.client.api_key`, then line 1046+ build `dump_payload` that includes that `api_key`. This function is intended for debugging 4xx failures and the dump may be written to disk or logs, leaking the provider API key.",
+      "locator": "agent/agent_runtime_helpers.py:1040",
+      "severity": "medium",
+      "source_label": "agent/agent_runtime_helpers.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::agent/agent_runtime_helpers.py:1040::debug-dump-function-incl"
+    },
+    {
+      "claim": "Logic bug in message merge: unknown content shape falls through without incrementing `merges` counter, and appends the message separately, which may silently break the expected merge count accounting.",
+      "evidence": "In `drop_thinking_only_and_merge_users`, when content types are mixed or unknown, the code appends the message to `merged` and uses `continue`, skipping the `merges += 1` line. This makes the debug log potentially undercount merges and does not actually merge the messages, which can cause role-alternation violations with some provider APIs.",
+      "locator": "agent/agent_runtime_helpers.py:823",
+      "severity": "low",
+      "source_label": "agent/agent_runtime_helpers.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::agent/agent_runtime_helpers.py:823::logic-bug-in-message-mer"
+    },
+    {
+      "claim": "Untrusted LLM-generated tool arguments are passed directly to internal tool functions without sanitization, enabling injection attacks (SQL, command, template, etc.) if any tool is vulnerable.",
+      "evidence": "In invoke_tool, function_args (from LLM tool calls) is forwarded to tool functions at lines 1546 (todo_tool), 1557 (session_search), 1571-1575 (memory_tool), 1597 (clarify_tool), 1602 (_dispatch_delegate_task), and 1604 (handle_function_call) without any validation or parameterization. This introduces a latent injection path into downstream components that may construct queries or commands from these values.",
+      "locator": "agent/agent_runtime_helpers.py:1521",
+      "severity": "high",
+      "source_label": "agent/agent_runtime_helpers.py",
+      "raw": {},
+      "verdict": "confirmed",
+      "votes": [
+        {
+          "lens": "correctness",
+          "verdict": "confirmed",
+          "rationale": "The evidence shows that function_args from LLM tool calls are forwarded verbatim to tool functions (lines 1546\u20131604) without sanitization, establishing a direct causal chain: untrusted arguments flow into any tool that uses them unsafely, enabling injection attacks if a tool constructs queries or commands from those values.",
+          "refuted": false
+        },
+        {
+          "lens": "security",
+          "verdict": "refuted",
+          "rationale": "The claim overstates risk because tool call arguments are typically validated (e.g., via JSON schema) before reaching invoke_tool, and downstream tools often use parameterized interfaces (ORM, prepared statements) that prevent injection. The evidence does not show an absence of validation earlier in the pipeline or prove that any downstream component is vulnerable.",
+          "refuted": true
+        }
+      ],
+      "survived": true,
+      "dedup_key": "loc::agent/agent_runtime_helpers.py:1521::untrusted-llm-generated-"
+    },
+    {
+      "claim": "Cross-provider reasoning leak in copy_reasoning_content_for_api allows chain-of-thought from a prior provider to be leaked to the current API call when needs_thinking_pad is False or tool_calls absent",
+      "evidence": "Step 2 (lines 1870-1877) only prevents promotion of the `reasoning` field when `needs_thinking_pad` is True AND `tool_calls` is present. If either condition is false (e.g., provider does not require thinking padding, or message has no tool_calls), step 3 (lines 1884-1886) unconditionally promotes `reasoning` to `reasoning_content`. This leaks chain-of-thought text originally written by a different provider (e.g., MiniMax) into the API message sent to the current provider. The comments explicitly describe this cross-provider scenario but the mitigation is incomplete.",
+      "locator": "agent/agent_runtime_helpers.py:1884",
+      "severity": "medium",
+      "source_label": "agent/agent_runtime_helpers.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::agent/agent_runtime_helpers.py:1884::cross-provider-reasoning"
+    },
+    {
+      "claim": "Untrusted PATH environment flows to subprocess.run, allowing command injection",
+      "evidence": "_detect_claude_code_version calls subprocess.run([cmd, '--version'], ...) where cmd is either 'claude' or 'claude-code' (hardcoded but resolved via PATH). An attacker who controls the environment's PATH can substitute a malicious executable, leading to arbitrary code execution.",
+      "locator": "agent/anthropic_adapter.py:301",
+      "severity": "medium",
+      "source_label": "agent/anthropic_adapter.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::agent/anthropic_adapter.py:301::untrusted-path-environme"
+    },
+    {
+      "claim": "Overly broad JWT detection in _is_oauth_token can misclassify attacker-supplied non-OAuth strings as OAuth tokens",
+      "evidence": "The function returns True for any string starting with 'eyJ', which is the base64url-encoded header of a typical JWT. However, any base64-encoded data (e.g., an arbitrary attacker-controlled string) matches this pattern, potentially causing downstream authentication to treat a non-OAuth key as an OAuth token and apply incorrect auth headers.",
+      "locator": "agent/anthropic_adapter.py:346",
+      "severity": "medium",
+      "source_label": "agent/anthropic_adapter.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::agent/anthropic_adapter.py:346::overly-broad-jwt-detecti"
+    },
+    {
+      "claim": "Model substring matching allows attackers to enable/disable API features using crafted model names",
+      "evidence": "Functions such as _supports_adaptive_thinking, _supports_xhigh_effort, _forbids_sampling_params, and _supports_fast_mode test substrings (e.g., '4-7') against the model name, which can be user-supplied. Including these substrings in a malicious non-Anthropic model name can cause the adapter to omit required parameters (sampling params) or enable unsupported features, leading to API errors or unexpected behavior.",
+      "locator": "agent/anthropic_adapter.py:206",
+      "severity": "low",
+      "source_label": "agent/anthropic_adapter.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::agent/anthropic_adapter.py:206::model-substring-matching"
+    },
+    {
+      "claim": "OAuth token leak via trivial substring hostname check in _is_third_party_anthropic_endpoint",
+      "evidence": "The function returns False (meaning 'not a third-party endpoint') if the normalized base_url contains the substring 'anthropic.com'. An attacker who controls base_url (e.g., via provider config) can set it to 'https://anthropic.com.evil.com' \u2013 the check matches, the endpoint is classified as direct Anthropic, and the caller sends OAuth credentials (Bearer token) to the attacker's host, leaking the token.",
+      "locator": "agent/anthropic_adapter.py:376",
+      "severity": "high",
+      "source_label": "agent/anthropic_adapter.py",
+      "raw": {},
+      "verdict": "confirmed",
+      "votes": [
+        {
+          "lens": "correctness",
+          "verdict": "confirmed",
+          "rationale": "The function uses substring containment ('anthropic.com' in base_url) which matches an attacker-controlled hostname like 'anthropic.com.evil.com', causing it to incorrectly classify the endpoint as direct Anthropic. The caller then sends OAuth bearer tokens to that attacker-controlled host, leading to token leakage.",
+          "refuted": false
+        },
+        {
+          "lens": "security",
+          "verdict": "refuted",
+          "rationale": "The claim assumes a naive substring check, but typical implementations parse the host and compare exact match or suffix with dot (e.g., 'anthropic.com' or '.anthropic.com'), which would not match 'anthropic.com.evil.com'. Without evidence that the code uses a substring, the attack is not feasible.",
+          "refuted": true
+        }
+      ],
+      "survived": true,
+      "dedup_key": "loc::agent/anthropic_adapter.py:376::oauth-token-leak-via-tri"
+    },
+    {
+      "claim": "Path substring match in _is_deepseek_anthropic_endpoint may misclassify unrelated endpoints",
+      "evidence": "The condition uses \"/anthropic\" in normalized, which matches any URL whose path contains '/anthropic' (e.g., '/anthropic-extra', '/not/anthropic'). This could cause code to apply DeepSeek-specific handling to non\u2011DeepSeek endpoints that happen to have '/anthropic' in their path, potentially leading to incorrect mode behavior.",
+      "locator": "agent/anthropic_adapter.py:468",
+      "severity": "low",
+      "source_label": "agent/anthropic_adapter.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::agent/anthropic_adapter.py:468::path-substring-match-in-"
+    },
+    {
+      "claim": "Substring 'azure.com' check in _requires_bearer_auth and _base_url_needs_context_1m_beta causes false positives",
+      "evidence": "The check \"azure.com\" in normalized matches any hostname containing 'azure.com' (e.g., 'notazure.com', 'azure.com.evil.com'). This can cause the client to use Bearer auth (or add 1M context beta) on endpoints that are not Azure, leading to auth failures or incorrect betas.",
+      "locator": "agent/anthropic_adapter.py:485",
+      "severity": "low",
+      "source_label": "agent/anthropic_adapter.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::agent/anthropic_adapter.py:485::substring-azure-com-chec"
+    },
+    {
+      "claim": "Substring '/anthropic' path check in _is_azure_anthropic_endpoint may misclassify non\u2011Azure endpoints",
+      "evidence": "Similar to the DeepSeek issue, the condition uses \"/anthropic\" in path. Any URL with a path containing '/anthropic' (e.g., '/anthropic-other') will be classified as Azure, triggering api\u2011version query parameter injection that is not required, potentially breaking non\u2011Azure endpoints.",
+      "locator": "agent/anthropic_adapter.py:532",
+      "severity": "low",
+      "source_label": "agent/anthropic_adapter.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::agent/anthropic_adapter.py:532::substring-anthropic-path"
+    },
+    {
+      "claim": "Temporary write of credentials with insecure default permissions leaves race window for exposure",
+      "evidence": "_write_claude_code_credentials creates a .tmp file with default permissions (not 0o600). The file is then replaced onto the target path, inheriting the tmp file's permissions. chmod(0o600) is applied only after the replace, creating a race window where the final file may be world-readable. Additionally, if the process crashes between writing the .tmp file and the replace, the .tmp file persists with default permissions containing sensitive OAuth tokens.",
+      "locator": "agent/anthropic_adapter.py:1043",
+      "severity": "low",
+      "source_label": "agent/anthropic_adapter.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::agent/anthropic_adapter.py:1043::temporary-write-of-crede"
+    },
+    {
+      "claim": "Race condition: timeout timer may fire before the stream context manager is entered, causing premature client close",
+      "evidence": "timer.start() at L797, then _check_cancelled() at L798, then stream context at L799. If the timer fires before stream creation, _close_client_on_timeout closes the client and evicts cache, leaving the stream in an invalid state or causing connection errors. The timer is not cancelled on exception before stream creation.",
+      "locator": "agent/auxiliary_client.py:797",
+      "severity": "medium",
+      "source_label": "agent/auxiliary_client.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::agent/auxiliary_client.py:797::race-condition-timeout-t"
+    },
+    {
+      "claim": "Thread-unsafe shared client: concurrent async requests to the same sync adapter race on self._client",
+      "evidence": "Async adapter at L936-938 calls asyncio.to_thread(self._sync.create, **kwargs); the sync adapter's create (L799) uses self._client.responses.stream; multiple concurrent async calls share the same _client (httpx transport) without synchronization, leading to data races, connection corruption, or cross-request interference.",
+      "locator": "agent/auxiliary_client.py:936",
+      "severity": "high",
+      "source_label": "agent/auxiliary_client.py",
+      "raw": {},
+      "verdict": "confirmed",
+      "votes": [
+        {
+          "lens": "correctness",
+          "verdict": "confirmed",
+          "rationale": "Concurrent async calls to asyncio.to_thread(self._sync.create) spawn multiple threads, each accessing the same self._client (httpx transport) within the sync adapter's create method without synchronization, causing data races on a non-thread-safe object.",
+          "refuted": false
+        },
+        {
+          "lens": "security",
+          "verdict": "refuted",
+          "rationale": "The claim that concurrent async requests race on self._client is unverified because the sync adapter's create method may use a per-request client instance or internal locking, and the provided evidence does not confirm actual sharing of a single httpx transport across threads.",
+          "refuted": true
+        }
+      ],
+      "survived": true,
+      "dedup_key": "loc::agent/auxiliary_client.py:936::thread-unsafe-shared-cli"
+    },
+    {
+      "claim": "Sanitization failure fallback: exception in tool schema sanitizers leaves tools unsanitized",
+      "evidence": "At L718-719, strip_pattern_and_format and strip_slash_enum are called; if they raise (L720 caught), sanitization is skipped and original tools are used for conversion and API call. This bypasses the intended pattern/format stripping, potentially causing HTTP 400 or allowing unexpected schema content.",
+      "locator": "agent/auxiliary_client.py:720",
+      "severity": "low",
+      "source_label": "agent/auxiliary_client.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::agent/auxiliary_client.py:720::sanitization-failure-fal"
+    },
+    {
+      "claim": "JWT expiry validation without signature verification in _read_codex_access_token",
+      "evidence": "The function decodes the JWT payload from access_token (line 1378) to check the 'exp' claim, but does not verify the token's cryptographic signature. An attacker with write access to the auth store could forge a token with a future expiration, causing the code to treat an invalid/expired token as valid. Although the token is eventually passed to the API server which may reject it, the internal expiry check is unreliable.",
+      "locator": "agent/auxiliary_client.py:1378",
+      "severity": "low",
+      "source_label": "agent/auxiliary_client.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::agent/auxiliary_client.py:1378::jwt-expiry-validation-wi"
+    },
+    {
+      "claim": "_try_custom_endpoint does not call _validate_base_url on custom_base before constructing an OpenAI client, so malformed or attacker-controlled base URLs are used without any syntax check.",
+      "evidence": "The function _validate_base_url is defined at line 1783 to reject obviously broken URLs (e.g., bad ports) but is never invoked inside _try_custom_endpoint. custom_base flows directly into _extract_url_query_params and then into the OpenAI constructor (line 1817), allowing any arbitrary URL to be passed to the HTTP client.",
+      "locator": "agent/auxiliary_client.py:1814",
+      "severity": "medium",
+      "source_label": "agent/auxiliary_client.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::agent/auxiliary_client.py:1814::try-custom-endpoint-does"
+    },
+    {
+      "claim": "Concurrent access to `_aux_unhealthy_until` and `_aux_unhealthy_logged_at` without synchronization leads to data races in async context.",
+      "evidence": "`_mark_provider_unhealthy` (line 2180) writes to `_aux_unhealthy_until` without any lock, while `_is_provider_unhealthy` (line 2199) reads and writes (pop) to the same dict without lock. Similarly, `_log_skip_unhealthy` (line 2215) writes to `_aux_unhealthy_logged_at` without lock. In an async or multi-threaded environment, this can cause lost updates, stale reads, and inconsistent state, leading to incorrect provider skipping or retention of unhealthy marks.",
+      "locator": "agent/auxiliary_client.py:2180",
+      "severity": "medium",
+      "source_label": "agent/auxiliary_client.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::agent/auxiliary_client.py:2180::concurrent-access-to-aux"
+    },
+    {
+      "claim": "In _try_payment_fallback, the condition `if main_provider and main_provider.lower() in skip:` uses substring containment instead of equality, which can cause the main provider to be incorrectly included in the skip set when its lowercased name is a substring of the lowercased failed_provider.",
+      "evidence": "main_provider.lower() in skip checks if the main provider name is a substring of the failed provider string, not an exact match. For example, if failed_provider='openai-codex' and main_provider='openai', then 'openai' in 'openai-codex' evaluates to True, causing main_provider to be added to skip_labels, potentially preventing a valid fallback. This is a logic bug that reduces reliability but not a direct security vulnerability.",
+      "locator": "agent/auxiliary_client.py:2720",
+      "severity": "low",
+      "source_label": "agent/auxiliary_client.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::agent/auxiliary_client.py:2720::in-try-payment-fallback-"
+    },
+    {
+      "claim": "Fallback base_url is bypassed when creds['base_url'] is missing or None due to str(None) conversion.",
+      "evidence": "raw_base_url = str(creds.get('base_url', '')).strip().rstrip('/') or pconfig.inference_base_url. If creds['base_url'] is None, str(None) yields 'None', which is truthy, so the fallback pconfig.inference_base_url is never used. This causes raw_base_url to be set to the literal string 'None', likely resulting in invalid URLs or unexpected connections.",
+      "locator": "agent/auxiliary_client.py:3515",
+      "severity": "medium",
+      "source_label": "agent/auxiliary_client.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::agent/auxiliary_client.py:3515::fallback-base-url-is-byp"
+    },
+    {
+      "claim": "CacheKey/credential mismatch in _refresh_nous_auxiliary_client",
+      "evidence": "The function constructs the cache key using the api_key parameter, but the OpenAI client is created with fresh_key from _resolve_nous_runtime_api. If different callers pass distinct api_key values for the same provider, they could be cached under different keys yet share the same underlying client (using the runtime's fresh_key). This can lead to credential confusion: later cache lookups by the original api_key will return the client with runtime credentials, potentially granting unintended access or privilege escalation if the runtime key has broader scope.",
+      "locator": "agent/auxiliary_client.py:4051",
+      "severity": "medium",
+      "source_label": "agent/auxiliary_client.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::agent/auxiliary_client.py:4051::cachekey-credential-mism"
+    },
+    {
+      "claim": "Explicit api_key argument is overridden by config values in _resolve_task_provider_model when config provides base_url+api_key or a provider with api_key.",
+      "evidence": "Lines 4327-4336: When base_url argument is not provided but cfg_base_url and cfg_api_key exist, the function returns cfg_api_key instead of the api_key parameter (line 4329). Similarly, when cfg_base_url and cfg_provider are set (line 4333), the returned api_key is None, ignoring the explicit argument. Line 4336 also returns cfg_api_key, overriding the explicit argument. This violates documented priority 'Explicit provider/model/base_url/api_key args (always win)'.",
+      "locator": "agent/auxiliary_client.py:4329",
+      "severity": "medium",
+      "source_label": "agent/auxiliary_client.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::agent/auxiliary_client.py:4329::explicit-api-key-argumen"
+    },
+    {
+      "claim": "extra_body from config is passed into API call kwargs without validation, allowing potential override of essential parameters (model, messages, tools) if config is attacker-controlled.",
+      "evidence": "_build_call_kwargs accepts extra_body dict from _get_task_extra_body (line 4490). This dict is included in the kwargs sent to the API call (not fully shown, but typical usage merges or sets extra_body). An attacker with write access to config.yaml could inject arbitrary keys into extra_body, overriding request parameters like model, messages, or tools, leading to unauthorized API behavior or injection.",
+      "locator": "agent/auxiliary_client.py:4490",
+      "severity": "medium",
+      "source_label": "agent/auxiliary_client.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::agent/auxiliary_client.py:4490::extra-body-from-config-i"
+    },
+    {
+      "claim": "Unrestricted extra_body parameter injection allows caller to override task-specific request body fields, potentially altering LLM behavior (e.g., removing safety parameters, injecting malicious instructions).",
+      "evidence": "extra_body parameter is merged into effective_extra_body at line 4644 without sanitization and passed directly to client.chat.completions.create at line 4731. Task-specific extra_body (from _get_task_extra_body) can be overridden by caller's extra_body.",
+      "locator": "agent/auxiliary_client.py:4615",
+      "severity": "medium",
+      "source_label": "agent/auxiliary_client.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::agent/auxiliary_client.py:4615::unrestricted-extra-body-"
+    },
+    {
+      "claim": "Unsantized extra_body parameter can inject arbitrary LLM API parameters, overriding intended configuration.",
+      "evidence": "The extra_body dict is merged into effective_extra_body (line 5045-5046) and later passed to _build_call_kwargs (line 5104-5108) which forwards it to the LLM API call. An attacker can inject parameters like 'model', 'tools', or 'stream' to alter behavior or bypass restrictions.",
+      "locator": "agent/auxiliary_client.py:5045",
+      "severity": "medium",
+      "source_label": "agent/auxiliary_client.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::agent/auxiliary_client.py:5045::unsantized-extra-body-pa"
+    },
+    {
+      "claim": "Potential SSRF via attacker-controlled base_url in fallback provider",
+      "evidence": "The base_url for the fallback API call is constructed from `str(getattr(fb_client, \"base_url\", \"\") or \"\")`. The `fb_client` is obtained from fallback functions that may use user-configured fallback_chain (per-task). An attacker who can set a fallback provider can supply a malicious base_url pointing to internal resources, causing the agent to make requests to those resources (SSRF).",
+      "locator": "agent/auxiliary_client.py:5296",
+      "severity": "medium",
+      "source_label": "agent/auxiliary_client.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::agent/auxiliary_client.py:5296::potential-ssrf-via-attac"
+    },
+    {
+      "claim": "Unvalidated keyword arguments in `has_azure_identity_credentials` can crash on unknown keys",
+      "evidence": "The function `has_azure_identity_credentials` accepts `**overrides` and passes them directly to `EntraIdentityConfig(scope=effective_scope, **overrides)`. If `overrides` contains keys other than `scope` and `exclude_interactive_browser`, a `TypeError` is raised because the frozen dataclass does not accept unexpected fields. This can cause a crash if untrusted or malformed input reaches this parameter (e.g., from external config sources or attacker-controlled data).",
+      "locator": "agent/azure_identity_adapter.py:293",
+      "severity": "low",
+      "source_label": "agent/azure_identity_adapter.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::agent/azure_identity_adapter.py:293::unvalidated-keyword-argu"
+    },
+    {
+      "claim": "Potential SSRF via attacker-controlled region parameter",
+      "evidence": "`_get_bedrock_runtime_client` uses the `region` argument (from `resolve_bedrock_region`) to construct a boto3 client, which builds the service endpoint as `bedrock-runtime.{region}.amazonaws.com`. If an attacker can influence the region value (e.g., via an `env` dict passed from an untrusted source like HTTP headers into `resolve_bedrock_region`), they could cause the client to connect to a malicious endpoint (e.g., `bedrock-runtime.attacker.com.amazonaws.com` if the domain resolves to an attacker-controlled server). No validation or whitelist of allowed regions is performed in this file.",
+      "locator": "agent/bedrock_adapter.py:75",
+      "severity": "low",
+      "source_label": "agent/bedrock_adapter.py",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::agent/bedrock_adapter.py:75::potential-ssrf-via-attac"
+    }
+  ]
+}

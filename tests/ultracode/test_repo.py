@@ -102,6 +102,18 @@ def test_audit_codebase_agent_decides_decomposition(tmp_path):
     assert strat["reasoning"]                         # the agent explained its decomposition
 
 
+def test_chunk_repo_prioritizes_security_files(tmp_path):
+    # robustness: when capping, pick the highest security-relevance files, not alphabetical
+    root = str(tmp_path)
+    _write(root, "aaa_readme.py", "\n".join(str(i) for i in range(20)))
+    _write(root, "auth_login.py", "\n".join(str(i) for i in range(20)))
+    _write(root, "payment_gateway.py", "\n".join(str(i) for i in range(20)))
+    _write(root, "zzz_helpers.py", "\n".join(str(i) for i in range(20)))
+    picked = {c.path for c in chunk_repo(root, max_files=2, prioritize=True)}
+    assert any("auth" in p for p in picked) and any("payment" in p for p in picked)
+    assert not any("readme" in p for p in picked)  # alphabetical-first junk NOT picked
+
+
 def test_repo_overview_summarizes(tmp_path):
     root = str(tmp_path)
     _write(root, "a/x.py", "\n".join(str(i) for i in range(50)))

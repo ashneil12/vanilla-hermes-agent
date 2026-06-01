@@ -22,7 +22,9 @@ def main():
     ap.add_argument("--model", default="deepseek-v4-flash")
     ap.add_argument("--out", default="bench/results/repo_audit")
     ap.add_argument("--emergent", action="store_true", help="agent scouts the repo and DECIDES the decomposition itself")
+    ap.add_argument("--ext", default=".py", help="comma-separated source extensions, e.g. .cpp,.cc,.h")
     args = ap.parse_args()
+    ext = tuple(e if e.startswith(".") else "." + e for e in args.ext.split(",")) if "," in args.ext else args.ext
 
     client = DeepSeekClient(model=args.model, max_workers=24)
     cfg = UltracodeConfig(verify_lenses=[VerifyLens.CORRECTNESS, VerifyLens.SECURITY],
@@ -31,12 +33,12 @@ def main():
     strategy = None
     if args.emergent:
         # the agent figures out the whole thing from scratch: scout -> decide -> fan out
-        res, strategy = audit_codebase(args.root, AUDIT, delegate_fn=client.delegate_fn,
+        res, strategy = audit_codebase(args.root, AUDIT, ext=ext, delegate_fn=client.delegate_fn,
                                        aux_call_fn=client.aux_call_fn, config=cfg, concurrency=24,
                                        max_files_cap=args.max_files, progress=lambda m: print("  " + m, flush=True))
     else:
         inc = tuple(s for s in args.include.split(",") if s)
-        chunks = chunk_repo(args.root, include_substr=inc, max_files=args.max_files)
+        chunks = chunk_repo(args.root, ext=ext, include_substr=inc, max_files=args.max_files)
         print(f"chunks={len(chunks)} files={len(sorted({c.path for c in chunks}))}", flush=True)
         res = audit_repo(chunks, AUDIT, delegate_fn=client.delegate_fn, config=cfg,
                          concurrency=24, verify_severities=("critical", "high"), progress=lambda m: print("  " + m, flush=True))

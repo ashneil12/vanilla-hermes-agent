@@ -55,6 +55,23 @@ _DEFAULT_EXCLUDE = (
 )
 
 
+# Path keywords that signal security/correctness risk — used to RANK files when
+# the agent's strategy is empty/unreliable (a weak model often defaults to "all"),
+# so the cap still picks the high-value surface instead of alphabetical junk.
+_SECURITY_PATH_KEYWORDS = (
+    "auth", "secur", "token", "jwt", "cred", "secret", "password", "passwd", "payment", "billing",
+    "delegate", "deleg", "exec", "eval", "command", "shell", "subprocess", "sql", "query", "deserial",
+    "pickle", "yaml", "gateway", "provider", "webhook", "admin", "permission", "perm", "access", "login",
+    "session", "oauth", "crypto", "encrypt", "sign", "verify", "upload", "redirect", "ssrf", "request",
+    "mutation", "middleware", "sandbox", "terminal", "mcp", "tool", "api",
+)
+
+
+def _sec_score(rel: str) -> int:
+    r = rel.lower()
+    return sum(1 for k in _SECURITY_PATH_KEYWORDS if k in r)
+
+
 def _pruned_dir(dirname: str, exclude_substr: Tuple[str, ...]) -> bool:
     """True if a directory should be skipped entirely during the walk (speed:
     avoids crawling .venv/.git/node_modules on huge repos)."""
@@ -71,8 +88,12 @@ def chunk_repo(
     include_substr: Tuple[str, ...] = (),
     exclude_substr: Tuple[str, ...] = _DEFAULT_EXCLUDE,
     min_file_lines: int = 8,
+    prioritize: bool = False,
 ) -> List[Chunk]:
-    """Walk ``root`` and produce chunks (a big file becomes several)."""
+    """Walk ``root`` and produce chunks (a big file becomes several). When
+    ``prioritize`` is set, the per-file cap selects the highest security-relevance
+    files (by path keywords) instead of alphabetical — robustness against a weak
+    model's empty/unreliable strategy."""
     paths: List[str] = []
     for dirpath, dirs, files in os.walk(root):
         dirs[:] = [d for d in dirs if not _pruned_dir(d, exclude_substr)]
@@ -87,7 +108,10 @@ def chunk_repo(
             if include_substr and not any(x in norm for x in include_substr):
                 continue
             paths.append((full, rel))
-    paths.sort(key=lambda p: p[1])
+    if prioritize:
+        paths.sort(key=lambda p: (-_sec_score(p[1]), p[1]))  # high-risk files first
+    else:
+        paths.sort(key=lambda p: p[1])
     if max_files:
         paths = paths[:max_files]
 
@@ -290,6 +314,7 @@ def audit_codebase(
     root: str,
     task: str,
     *,
+    ext=".py",  # str or tuple of extensions (e.g. (".cpp",".cc",".h") for C/C++)
     delegate_fn=None, aux_call_fn=None, config=None, agent=None, model=None,
     concurrency: int = 24, max_files_cap: int = 60,
     progress: Optional[Callable[[str], None]] = None,
@@ -300,15 +325,15 @@ def audit_codebase(
     'find the files / one agent per file' is hardcoded into the call; the agent
     arrives at it from the task + the repo overview."""
     cfg = config or UltracodeConfig()
-    overview = repo_overview(root)
+    overview = repo_overview(root, ext=ext)
     if progress:
         progress(f"scout: {overview['total_files']} files / {overview['total_loc']} LOC across {len(overview['top_areas'])} areas")
     strategy = decide_audit_strategy(task, overview, aux_call_fn=aux_call_fn, agent=agent, model=model, max_files_cap=max_files_cap)
     if progress:
         progress(f"agent strategy: include={strategy['include_substr'] or 'ALL'} max_files={strategy['max_files']} — {strategy['reasoning'][:140]}")
-    chunks = chunk_repo(root, include_substr=strategy["include_substr"],
+    chunks = chunk_repo(root, ext=ext, include_substr=strategy["include_substr"],
                         exclude_substr=_DEFAULT_EXCLUDE + strategy["exclude_substr"],
-                        max_files=strategy["max_files"])
+                        max_files=strategy["max_files"], prioritize=True)  # security-rank the cap, robust to weak strategy
     res = audit_repo(chunks, task, delegate_fn=delegate_fn, config=cfg, agent=agent,
                      concurrency=concurrency, verify_severities=strategy["verify_severities"], progress=progress)
     res.caps_announced.insert(0, f"agent-decided strategy: {strategy['reasoning'][:200]}")
