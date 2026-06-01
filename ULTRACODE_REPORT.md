@@ -327,6 +327,40 @@ perfect 1.00 on microservices). Scripting the method underperformed teaching the
 3. Result is gated on `tkind==RESEARCH` / config flags — code-audit behavior unchanged
    (103 tests green).
 
+## UPDATE — hardening pass (adversarial red-team of the harness's own reasoning)
+
+Ran a 7-dimension adversarial red-team (discernment routing, decomposition quality,
+verification calibration, synthesis integrity, loop termination, error robustness,
+concurrency, generality), each weakness independently verified with a default-to-not-
+real stance. **21 verdicts, 6 confirmed — none a correctness bug.** The verify stage
+earned its keep: it knocked 15 speculative findings down to false/partly, and one
+verifier flagged a *proposed* fix as actively harmful (stuffing malformed LLM output
+into `coverage_note` would pollute the synthesis prompt). The reasoning is sound; what
+remained was small robustness/observability hardening plus one real research-correctness
+item. Shipped:
+
+- **Contradiction-preserving dedup (the one with teeth).** `"not"`/`"no"` are stopwords
+  and `dedup_key` slugs only the first 24 chars, so `"X is safe"` and `"X is not safe"`
+  collided → a genuine disagreement got silently merged into one position. Fixed with a
+  cheap polarity bit in `dedup_key` + a polarity guard in `reconcile_findings`; opposite
+  claims now survive as two findings (landscape synth presents them as CONTESTED). Tested.
+- **Empty-answer guard** at the one convergence point (`UltracodeResult.__post_init__`) —
+  a blank answer from any path (solo / judge fallback / synthesis) is now flagged, never
+  silently confident.
+- **Wave-failure degradation** — one delegate wave's backend exception no longer crashes
+  the other 99 at scale; it degrades to per-task error entries.
+- **Critic honesty** — empty gaps from a same-model critic now surfaces "completeness
+  UNKNOWN" (shares the finders' blind spots), instead of reading as a clean bill of health.
+- **Visible degradation** — `plan_approach` exceptions are kept in `reasoning` (mirrors
+  `plan()`); critic `raw` logged to the ledger (not into the synthesis prompt).
+
+**YAGNI (the red-team told me what NOT to build):** the `SOURCE_INDEPENDENCE` lens and a
+`contradictions.py` module are phantoms — the agent-driven verification already reasons
+about source quality, and contradiction-preservation is one polarity guard, not a module.
+A `research_factcheck_gate` is redundant with the post-loop verify. Per-`aux_call`
+try/except would *hide* loud failures (exceptions propagating is the desired behavior).
+Two dead config flags removed. **104 tests green.**
+
 ## Status of the "honest next steps" above
 
 1. **Execution / ground-truth — DONE.** `execute.py` (isolated `-I` subprocess) +
