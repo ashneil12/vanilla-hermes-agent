@@ -4,7 +4,7 @@ import json
 import os
 
 from agent.ultracode.config import UltracodeConfig
-from agent.ultracode.repo import audit_repo, chunk_repo
+from agent.ultracode.repo import audit_codebase, audit_repo, chunk_repo, repo_overview
 
 
 def _write(root, rel, text):
@@ -68,3 +68,44 @@ def test_audit_repo_aggregates_and_verifies(tmp_path):
     assert any("SQL" in c for c in surv_claims)
     bf = res.by_file()
     assert any("db.py" in k for k in bf)
+
+
+def test_audit_codebase_agent_decides_decomposition(tmp_path):
+    # the EMERGENT path: the agent must (1) get a repo overview, (2) DECIDE the
+    # strategy (which files, one-finder-per-file) itself — nothing hardcoded.
+    root = str(tmp_path)
+    _write(root, "account/models.py", "\n".join(f"m{i}" for i in range(30)))
+    _write(root, "payment/gateway.py", "\n".join(f"p{i}" for i in range(30)))
+    _write(root, "vendor/huge.py", "\n".join(f"v{i}" for i in range(30)))
+    _write(root, "tests/test_x.py", "x\n" * 30)
+    calls = {"strategy": 0}
+
+    def aux(**kwargs):
+        sys = kwargs["messages"][0]["content"].lower()
+        if "orchestrator deciding how" in sys:
+            calls["strategy"] += 1
+            # the agent reasons: audit account+payment, one finder per file
+            return json.dumps({"reasoning": "highest-value security surface is account + payment; one finder per file",
+                               "include_substr": ["/account/", "/payment/"], "exclude_substr": ["/vendor/"],
+                               "max_files": 10, "one_finder_per_file": True, "verify_severities": ["critical"]})
+        return ""
+
+    def delegate(*, tasks, parent_agent, role):
+        return json.dumps({"results": [{"task_index": i, "status": "completed",
+                                        "summary": json.dumps({"findings": [{"claim": "issue", "line": 1, "evidence": "e", "severity": "low"}]})}
+                                       for i in range(len(tasks))]})
+
+    res, strat = audit_codebase(root, "Security-audit this repo.", aux_call_fn=aux, delegate_fn=delegate, config=UltracodeConfig())
+    assert calls["strategy"] == 1                  # the agent DECIDED, it wasn't hardcoded
+    assert "/account/" in strat["include_substr"]
+    assert res.n_files == 2                          # account + payment only (agent scoped it; vendor/tests excluded)
+    assert strat["reasoning"]                         # the agent explained its decomposition
+
+
+def test_repo_overview_summarizes(tmp_path):
+    root = str(tmp_path)
+    _write(root, "a/x.py", "\n".join(str(i) for i in range(50)))
+    _write(root, "tests/t.py", "z\n" * 50)
+    ov = repo_overview(root)
+    assert ov["total_files"] == 1  # test excluded
+    assert ov["total_loc"] >= 50

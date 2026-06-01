@@ -18,7 +18,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional, Tuple
 
-from agent.ultracode.adapters import delegate_fanout, extract_json
+from agent.ultracode.adapters import aux_call, delegate_fanout, extract_json, runtime_from_agent
 from agent.ultracode.config import UltracodeConfig
 from agent.ultracode.schema import Finding, dedupe_findings, reconcile_findings
 from agent.ultracode.verify import survivors as _survivors, verify_findings
@@ -173,3 +173,115 @@ def audit_repo(
         res.survivors = findings
     res.findings = findings
     return res
+
+
+# ---------------------------------------------------------------------------
+# EMERGENT decomposition: the agent reasons out HOW to tackle a large repo,
+# instead of a hardcoded pipeline. Given "audit this directory", a real ultracode
+# agent must (1) recognize it's too big for one pass, (2) DISCOVER the work-list
+# (enumerate source files), (3) decide one finder per file, (4) aggregate. This
+# makes step (2)+(3) the AGENT'S decision, executed by the harness.
+# ---------------------------------------------------------------------------
+
+
+def repo_overview(root: str, *, ext: str = ".py", exclude_substr: Tuple[str, ...] = _DEFAULT_EXCLUDE) -> dict:
+    """What the agent 'sees' when it first looks at the repo: top-level layout,
+    file counts, and total LOC — the cheap reconnaissance that authorizes a plan."""
+    by_dir: dict = {}
+    total_files = total_loc = 0
+    for dirpath, _dirs, files in os.walk(root):
+        for fn in files:
+            if not fn.endswith(ext):
+                continue
+            full = os.path.join(dirpath, fn)
+            norm = "/" + os.path.relpath(full, root).replace(os.sep, "/")
+            if any(x in norm for x in exclude_substr):
+                continue
+            top = norm.strip("/").split("/")[0] + ("/" + norm.strip("/").split("/")[1] if norm.count("/") > 2 else "")
+            try:
+                loc = sum(1 for _ in open(full, encoding="utf-8", errors="replace"))
+            except OSError:
+                loc = 0
+            d = by_dir.setdefault(top, {"files": 0, "loc": 0})
+            d["files"] += 1
+            d["loc"] += loc
+            total_files += 1
+            total_loc += loc
+    top_dirs = sorted(by_dir.items(), key=lambda kv: -kv[1]["loc"])[:25]
+    return {
+        "root": root, "total_files": total_files, "total_loc": total_loc,
+        "top_areas": [{"area": k, "files": v["files"], "loc": v["loc"]} for k, v in top_dirs],
+    }
+
+
+_STRATEGY_SYSTEM = (
+    "You are an ultracode orchestrator deciding HOW to audit a large codebase you cannot read in one pass. "
+    "Reason from scratch: the repo is too big for a single context, so you must DISCOVER the work-list by "
+    "enumerating source files, then audit each independently (one finder per file), then aggregate and verify "
+    "the load-bearing findings. Decide the concrete scope: which areas/paths to include, what to exclude "
+    "(tests, migrations, vendored), and how deep to go given the size. Be decisive and specific."
+)
+
+
+def decide_audit_strategy(task: str, overview: dict, *, aux_call_fn=None, agent=None, model=None,
+                          max_files_cap: int = 60) -> dict:
+    """The agent's own decision: given the repo overview, how to decompose."""
+    areas = "\n".join(f"  - {a['area']}: {a['files']} files, {a['loc']} LOC" for a in overview["top_areas"])
+    user = (
+        f"TASK: {task}\n\n"
+        f"REPO: {overview['root']} — {overview['total_files']} source files, {overview['total_loc']} LOC.\n"
+        f"TOP AREAS by size:\n{areas}\n\n"
+        f"This is too large to read in one pass. Decide your audit strategy. You may audit at most "
+        f"{max_files_cap} files this pass (pick the highest-value security/correctness surface).\n"
+        'Reply with ONLY JSON: {"reasoning":"<why this decomposition>", '
+        '"include_substr":["<path fragments to include, e.g. /account/>"], '
+        '"exclude_substr":["<extra excludes>"], "max_files":<int<=cap>, '
+        '"one_finder_per_file":true, "verify_severities":["critical","high"]}'
+    )
+    try:
+        text = aux_call(
+            [{"role": "system", "content": _STRATEGY_SYSTEM}, {"role": "user", "content": user}],
+            model=model, temperature=0.2, max_tokens=1500,
+            main_runtime=runtime_from_agent(agent), call_fn=aux_call_fn,
+        )
+    except Exception:
+        text = ""
+    parsed = extract_json(text)
+    if not isinstance(parsed, dict):
+        parsed = {}
+    return {
+        "reasoning": str(parsed.get("reasoning", "")).strip(),
+        "include_substr": tuple(parsed.get("include_substr", []) or []),
+        "exclude_substr": tuple(parsed.get("exclude_substr", []) or []),
+        "max_files": min(int(parsed.get("max_files", max_files_cap) or max_files_cap), max_files_cap),
+        "verify_severities": tuple(parsed.get("verify_severities", ["critical", "high"]) or ["critical", "high"]),
+    }
+
+
+def audit_codebase(
+    root: str,
+    task: str,
+    *,
+    delegate_fn=None, aux_call_fn=None, config=None, agent=None, model=None,
+    concurrency: int = 24, max_files_cap: int = 60,
+    progress: Optional[Callable[[str], None]] = None,
+) -> Tuple[RepoAuditResult, dict]:
+    """Agent-driven repo audit: the agent SCOUTS the repo, DECIDES the
+    decomposition (which files, one-finder-per-file), then the harness executes
+    it. Returns (result, strategy). This is the emergent version — nothing about
+    'find the files / one agent per file' is hardcoded into the call; the agent
+    arrives at it from the task + the repo overview."""
+    cfg = config or UltracodeConfig()
+    overview = repo_overview(root)
+    if progress:
+        progress(f"scout: {overview['total_files']} files / {overview['total_loc']} LOC across {len(overview['top_areas'])} areas")
+    strategy = decide_audit_strategy(task, overview, aux_call_fn=aux_call_fn, agent=agent, model=model, max_files_cap=max_files_cap)
+    if progress:
+        progress(f"agent strategy: include={strategy['include_substr'] or 'ALL'} max_files={strategy['max_files']} — {strategy['reasoning'][:140]}")
+    chunks = chunk_repo(root, include_substr=strategy["include_substr"],
+                        exclude_substr=_DEFAULT_EXCLUDE + strategy["exclude_substr"],
+                        max_files=strategy["max_files"])
+    res = audit_repo(chunks, task, delegate_fn=delegate_fn, config=cfg, agent=agent,
+                     concurrency=concurrency, verify_severities=strategy["verify_severities"], progress=progress)
+    res.caps_announced.insert(0, f"agent-decided strategy: {strategy['reasoning'][:200]}")
+    return res, strategy
