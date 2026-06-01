@@ -41,6 +41,10 @@ class CorpusResearchResult:
     caps_announced: List[str] = field(default_factory=list)
 
 
+# Above this finding count, the single-call prose synthesis condenses lossily, so the
+# complete deduped union is appended as the authoritative deliverable (announced).
+_LOSSY_SYNTH_AT = 40
+
 _TOK = re.compile(r"[a-z0-9_]+")
 _QSTOP = set(
     "the a an is are be of to in on for and or with what which list every all each that this it does "
@@ -119,7 +123,9 @@ def research_corpus(
     chunks = chunk_repo(root, ext=ext, max_chunk_lines=max_chunk_lines, max_files=max_files, **chunk_kw)
     res = CorpusResearchResult(question=question, n_files=len({c.path for c in chunks}), n_chunks=len(chunks))
     if not chunks:
-        res.caps_announced.append("no readable documents found under root")
+        res.caps_announced.append(
+            f"no readable documents found under {root} matching ext={ext} "
+            f"(check the ext filter, min_file_lines, include/exclude, or permissions)")
         return res
 
     if top_k_chunks and len(chunks) > top_k_chunks:
@@ -157,4 +163,17 @@ def research_corpus(
         from agent.ultracode.harness import _synthesize
         res.answer = _synthesize(question, survs, findings, crit_note="", model=model, rt=None,
                                  aux_call_fn=aux_call_fn, landscape=True)
+        # The prose landscape synth is KNOWN-LOSSY at high finding counts (a single
+        # bounded generation condenses and drops items — observed ~0.91 coverage at 80
+        # findings). The deduped findings union is the AUTHORITATIVE complete deliverable:
+        # append it (announced) so coverage is never silently dropped. Never truncate
+        # findings to fit the prose — that would delete real results.
+        if len(findings) > _LOSSY_SYNTH_AT:
+            appendix = "\n".join(f"- {f.claim} ({f.locator})" for f in findings)
+            res.answer = (res.answer or "").rstrip() + (
+                f"\n\n## Complete itemized findings ({len(findings)}, authoritative — the prose "
+                f"above is a readable summary and is lossy at this scale)\n{appendix}")
+            res.caps_announced.append(
+                f"prose synthesis is lossy at scale ({len(findings)} findings); appended the complete "
+                f"deduped union as the authoritative list (no findings dropped)")
     return res

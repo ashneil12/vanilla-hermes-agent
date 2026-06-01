@@ -58,6 +58,36 @@ def test_relevance_rank_orders_by_question_overlap():
     assert ranked[0].path == "b"   # the relevant chunk ranks first
 
 
+def test_research_corpus_appends_complete_union_at_scale(tmp_path):
+    # prose synth is lossy at high finding counts -> the complete deduped union must be
+    # appended (announced), so coverage is never silently dropped.
+    root = str(tmp_path)
+    for i in range(50):
+        _write(root, f"f{i}.md", f"Fact: widget_{i} has property prop_{i}.\n" + "pad\n" * 12)
+
+    def fake_delegate(*, tasks, parent_agent, role):
+        results = []
+        for i, t in enumerate(tasks):
+            m = next((j for j in range(50) if f"widget_{j} " in t["goal"] or f"widget_{j}." in t["goal"]), None)
+            # distinct locators (no shared token) so reconcile keeps them as 50 findings
+            body = {"findings": [{"claim": f"widget_{m} has prop_{m}", "locator": f"componentZeta{m}",
+                                  "evidence": "x", "severity": "info"}]} if m is not None else {"findings": []}
+            results.append({"task_index": i, "status": "completed", "summary": json.dumps(body)})
+        return json.dumps({"results": results})
+
+    # the synthesizer deliberately drops most items (simulating lossy condensation)
+    def lossy_aux(**kwargs):
+        return "Summary: there are several widgets including widget_0 and widget_1."
+
+    res = research_corpus(root, "List every widget and its property.", ext=".md",
+                          delegate_fn=fake_delegate, aux_call_fn=lossy_aux,
+                          config=UltracodeConfig(), min_file_lines=2)
+    assert len(res.findings) >= 45                       # extraction recovered ~all
+    # the lossy prose alone would miss most; the appended union must contain every widget
+    assert "widget_49" in res.answer and "widget_30" in res.answer
+    assert any("authoritative" in c.lower() for c in res.caps_announced)  # announced, not silent
+
+
 def test_research_corpus_topk_retrieval_announces_skips(tmp_path):
     root = str(tmp_path)
     for i in range(6):

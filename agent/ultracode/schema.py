@@ -227,7 +227,9 @@ def _loc_tokens(locator: str) -> set:
     return {w for w in re.findall(r"[a-z0-9_]+", (locator or "").lower()) if len(w) > 2}
 
 
-_NEG = re.compile(r"\b(not|no|never|cannot|can'?t|won'?t|doesn'?t|isn'?t|aren'?t|without|fails?|unable|lacks?|none|neither)\b|n't", re.I)
+# "without" deliberately excluded: it's usually non-negating in claims ("works without
+# issues") and false-splits legitimate near-duplicate merges.
+_NEG = re.compile(r"\b(not|no|never|cannot|can'?t|won'?t|doesn'?t|isn'?t|aren'?t|fails?|unable|lacks?|none|neither)\b|n't", re.I)
 
 
 def _polarity(claim: str) -> bool:
