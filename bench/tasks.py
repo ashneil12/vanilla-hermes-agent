@@ -165,7 +165,81 @@ def retry(fn, attempts=3):
     ],
 )
 
+# HARD tier: a larger service with MANY bugs of varied subtlety — designed so a
+# single confident pass tends to catch the obvious ones and MISS the subtle ones
+# (recall breadth is where decompose+loop+multi-finder should pull ahead). Also
+# seeds a couple of nit-traps (== None, unused var) that are NOT real bugs, to
+# keep precision honest.
+_BIGBUG = BugTask(
+    id="bigbug",
+    prompt="Find ALL real bugs (security, correctness, concurrency, resource) in this service. Ignore pure style nits.",
+    code='''import os, hashlib, sqlite3, random, threading
+
+SESSION_SECRET = "s3cr3t-key-do-not-share"
+
+_counter = 0
+def next_id():
+    global _counter
+    _counter = _counter + 1          # race: non-atomic read-modify-write
+    return _counter
+
+def hash_password(pw):
+    return hashlib.md5(pw.encode()).hexdigest()   # weak hash for passwords
+
+def login(db, user, pw):
+    row = db.execute("SELECT pw FROM users WHERE name='%s'" % user).fetchone()  # sql injection
+    return row and row[0] == hash_password(pw)
+
+def read_report(base, name):
+    full = os.path.join(base, name)               # path traversal: name may be ../../etc
+    fh = open(full)
+    return fh.read()                              # file handle leaked (never closed)
+
+def page(items, page_num, size=10):
+    start = page_num * size
+    return items[start:start + size + 1]          # off-by-one: returns size+1 rows
+
+def get_order(db, requester, order_id):
+    return db.execute("SELECT * FROM orders WHERE id=%d" % order_id).fetchone()  # IDOR: no owner check
+
+def add_tag(tag, tags=[]):                         # mutable default argument
+    tags.append(tag)
+    return tags
+
+def token():
+    return hashlib.md5(str(random.random()).encode()).hexdigest()  # predictable token (weak RNG)
+
+def parse(data):
+    try:
+        return int(data)
+    except:
+        return None                                # bare except swallows everything
+
+def avg(xs):
+    return sum(xs) // len(xs)                       # integer division + ZeroDivision on empty
+
+def run_hook(cmd):
+    os.system("/bin/sh -c " + cmd)                 # command injection
+''',
+    planted=[
+        Bug("race_counter", "high", [["race"], ["not atomic"], ["non-atomic"], ["thread", "counter"], ["lock", "counter"]]),
+        Bug("weak_password_hash", "high", [["md5", "password"], ["weak", "hash"], ["insecure", "hash"], ["md5", "weak"]]),
+        Bug("sql_injection", "critical", [["sql", "inject"], ["%s", "query"], ["string", "format", "sql"]]),
+        Bug("path_traversal", "high", [["path", "travers"], ["../"], ["directory", "travers"]]),
+        Bug("file_leak", "medium", [["not", "close"], ["file", "leak"], ["unclosed"], ["handle", "leak"]]),
+        Bug("pagination_off_by_one", "medium", [["off-by-one"], ["off by one"], ["size + 1"], ["size+1"], ["extra row"], ["one too many"]]),
+        Bug("idor", "critical", [["idor"], ["owner", "check"], ["access control"], ["authoriz"], ["any order"]]),
+        Bug("mutable_default", "medium", [["mutable default"], ["default", "argument"], ["shared", "list", "default"]]),
+        Bug("weak_token_rng", "high", [["predictable", "token"], ["weak", "random"], ["random.random", "token"], ["insecure", "random"]]),
+        Bug("bare_except", "low", [["bare except"], ["except", "swallow"], ["broad except"], ["catch", "everything"]]),
+        Bug("avg_zero_div", "medium", [["division by zero"], ["zerodivision"], ["empty", "list"], ["len(xs)", "zero"]]),
+        Bug("command_injection", "critical", [["command", "inject"], ["os.system"], ["shell", "inject"]]),
+    ],
+)
+
 TASKS: List[BugTask] = [_AUTH, _FILEOPS, _WEB, _CONCURRENCY, _NEARCLEAN]
+HARD_TASKS: List[BugTask] = [_BIGBUG]
+ALL_TASKS: List[BugTask] = TASKS + HARD_TASKS
 
 
 def total_planted() -> int:

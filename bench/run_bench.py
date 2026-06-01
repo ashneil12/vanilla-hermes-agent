@@ -19,14 +19,14 @@ from agent.ultracode.schema import VerifyLens
 from bench.baseline import baseline_find
 from bench.deepseek_client import DeepSeekClient
 from bench.scorer import aggregate, score
-from bench.tasks import TASKS, total_planted
+from bench.tasks import ALL_TASKS, total_planted
 
 
 def _cfg() -> UltracodeConfig:
     return UltracodeConfig(
         verify_lenses=[VerifyLens.CORRECTNESS, VerifyLens.SECURITY, VerifyLens.REPRODUCES],
         max_finders=3, max_children=8, verify_quorum=2,
-        discovery_dry_rounds=2, discovery_max_rounds=3,
+        discovery_dry_rounds=2, discovery_max_rounds=2,
     )
 
 
@@ -37,10 +37,10 @@ def main():
     ap.add_argument("--model", default="deepseek-v4-pro")
     args = ap.parse_args()
 
-    tasks = TASKS
+    tasks = ALL_TASKS
     if args.tasks:
         want = set(args.tasks.split(","))
-        tasks = [t for t in TASKS if t.id in want]
+        tasks = [t for t in ALL_TASKS if t.id in want]
 
     rows = []
     base_scores, ultra_surv_scores, ultra_all_scores = [], [], []
@@ -91,7 +91,7 @@ def main():
 
     result = {
         "model": args.model,
-        "total_planted": total_planted() if tasks is TASKS else sum(len(t.planted) for t in tasks),
+        "total_planted": sum(len(t.planted) for t in tasks),
         "baseline_agg": aggregate(base_scores),
         "ultracode_survivors_agg": aggregate(ultra_surv_scores),
         "ultracode_all_agg": aggregate(ultra_all_scores),
