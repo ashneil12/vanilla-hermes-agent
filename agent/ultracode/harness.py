@@ -163,9 +163,14 @@ def run(
             led.event("done", res.summary())
         return res
 
-    # --- DISCERNMENT: solo-first; escalate only if a triage says it would help ---
+    # --- DISCERNMENT: choose DEPTH — solo / light-ensemble / full ------------
+    # The recall fix: "not full" still ENSEMBLES (solo union a finder wave) so
+    # recall >= any single pass — never the bare-solo single-call variance that
+    # dipped recall before. Bare-solo is reserved for trivial turns (handled
+    # above). Full adds loop-until-dry. Escalate to full only when triage earns it.
     seed_findings: List[Finding] = []
     pre_stages: List[str] = []
+    light = False
     if cfg.discernment and force_orchestrate is not True:
         solo_findings, solo_answer = _solo_audit(task, context, model=model, rt=rt, aux_call_fn=aux_call_fn)
         tv = assess(task, _solo_summary(solo_findings, solo_answer), context_size=len(context),
@@ -173,20 +178,9 @@ def run(
         if led:
             led.event("triage", {"orchestrate": tv.orchestrate, "confidence": tv.confidence,
                                   "stakes": tv.stakes, "gaps": tv.gaps, "reason": tv.reason})
-        if not tv.orchestrate:
-            # the disciplined default — a single pass already suffices, so don't
-            # burn the orchestration cost. THIS is the fix for "always full-metal".
-            res = UltracodeResult(
-                task=task, mode="discerned-solo", answer=solo_answer, decision=decision,
-                findings=solo_findings, survivors=solo_findings, stages=["solo-audit", "triage:solo"],
-                caps_announced=[f"discernment: stayed solo (confidence={tv.confidence:.2f}, "
-                                f"stakes={tv.stakes}) — {tv.reason}"],
-            )
-            if led:
-                led.event("done", res.summary())
-            return res
-        seed_findings = solo_findings  # escalating — build ON the solo pass, don't redo it
-        pre_stages = ["solo-audit", "triage:escalate"]
+        seed_findings = solo_findings   # always build ON the solo pass (union -> recall)
+        light = not tv.orchestrate      # not full -> LIGHT ensemble (one finder wave, no loop)
+        pre_stages = ["solo-audit", "triage:" + ("light" if light else "escalate")]
 
     # --- plan (work-list before fan-out) -------------------------------------
     plan = make_plan(task, decision, context="", config=cfg, agent=agent, aux_call_fn=aux_call_fn, model=model)
@@ -218,7 +212,8 @@ def run(
             found.extend(_parse_findings(entry if isinstance(entry, dict) else {}, f"r{round_idx}:{label}"))
         return found
 
-    if decision.loop_until_dry:
+    effective_loop = decision.loop_until_dry and not light  # light = single wave, no loop
+    if effective_loop:
         report = discover(finder_round, config=cfg, seen_keys={f.dedup_key() for f in seed_findings})
         findings = dedupe_findings(seed_findings + report.findings)
         caps.extend(report.caps_announced)
@@ -226,8 +221,9 @@ def run(
         if led:
             led.event("discovery", {"rounds": report.rounds_run, "fresh_per_round": report.fresh_per_round, "stop": report.stop_reason})
     else:
+        # light/non-loop: solo UNION one finder wave -> recall >= any single pass
         findings = dedupe_findings(seed_findings + finder_round(0, []))
-        stages = pre_stages + ["plan", "find"]
+        stages = pre_stages + ["plan", "find(light)" if light else "find"]
 
     # root-cause reconciliation: collapse near-duplicate findings (over-generation)
     if cfg.reconcile:
@@ -274,7 +270,7 @@ def run(
     stages.append("synthesize")
 
     res = UltracodeResult(
-        task=task, mode="ultracode", answer=answer, decision=decision, plan=plan,
+        task=task, mode=("discerned-light" if light else "ultracode"), answer=answer, decision=decision, plan=plan,
         findings=findings, survivors=survs, caps_announced=caps, stages=stages,
     )
     if led:

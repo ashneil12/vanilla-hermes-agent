@@ -220,14 +220,19 @@ def test_harness_solo_path():
     assert res.answer == "solo answer"
 
 
-def test_harness_discernment_stays_solo():
-    # triage says solo suffices -> NO orchestration (the fix for always-full-metal)
+def test_harness_discernment_light_ensembles_for_recall():
+    # triage says "not full" -> LIGHT ensemble (solo UNION one finder wave, no loop),
+    # so recall >= a single pass. NOT bare-solo, NOT the full loop.
     aux, delegate = _make_harness_fakes(triage_orchestrate=False)
     res = run("find all security and logic bugs in this code", context="<code>",
-              aux_call_fn=aux, delegate_fn=delegate, enable_ledger=False)
-    assert res.mode == "discerned-solo"
-    assert res.stages == ["solo-audit", "triage:solo"]
-    assert any("stayed solo" in c for c in res.caps_announced)
+              aux_call_fn=aux, delegate_fn=delegate, enable_ledger=False,
+              config=UltracodeConfig(verify_lenses=[VerifyLens.CORRECTNESS, VerifyLens.SECURITY, VerifyLens.REPRODUCES]))
+    assert res.mode == "discerned-light"
+    assert res.stages[:2] == ["solo-audit", "triage:light"]
+    assert "find(light)" in res.stages and "synthesize" in res.stages
+    assert not any("discover(loop" in s for s in res.stages)  # no expensive loop
+    # union of solo + finders, verified: the planted SQLi survives
+    assert any("SQL" in f.claim for f in res.survivors)
 
 
 def test_harness_discernment_escalates_when_warranted():
