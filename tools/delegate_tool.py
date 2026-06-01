@@ -154,6 +154,16 @@ _active_subagents_lock = threading.Lock()
 # for the lifetime of the run; _run_single_child is the owner.
 _active_subagents: Dict[str, Dict[str, Any]] = {}
 
+# Serializes every mutation of the process-global
+# ``model_tools._last_resolved_tool_names`` performed by delegation (the
+# main-thread child-build save/restore and the per-worker restore). Without this,
+# CONCURRENT delegate_task calls (e.g. concurrent fan-out waves) clobber each
+# other's tool-resolution side effect — the documented upstream thread-safety
+# blocker. An uncontended RLock is effectively free, so sequential behavior is
+# unchanged; concurrent delegation becomes safe. (execute_code already prefers an
+# explicit enabled_tools list, so the global is only a fallback.)
+_TOOL_GLOBAL_LOCK = threading.RLock()
+
 
 def set_spawn_paused(paused: bool) -> bool:
     """Globally block/unblock new delegate_task spawns.
@@ -1866,7 +1876,10 @@ def _run_single_child(
 
         saved_tool_names = getattr(child, "_delegate_saved_tool_names", None)
         if isinstance(saved_tool_names, list):
-            model_tools._last_resolved_tool_names = list(saved_tool_names)
+            # serialize: concurrent workers (or concurrent delegate_task calls)
+            # must not clobber the global mid-write.
+            with _TOOL_GLOBAL_LOCK:
+                model_tools._last_resolved_tool_names = list(saved_tool_names)
 
         # Remove child from active tracking
 
@@ -2046,6 +2059,11 @@ def delegate_task(
     # which overwrites model_tools._last_resolved_tool_names with child's toolset.
     import model_tools as _model_tools
 
+    # Acquire the global-tool-names lock around the whole save -> build ->
+    # restore critical section so concurrent delegate_task calls can't interleave
+    # their mutations of model_tools._last_resolved_tool_names. Released in the
+    # finally below. (Uncontended -> ~free, so sequential behavior is identical.)
+    _TOOL_GLOBAL_LOCK.acquire()
     _parent_tool_names = list(_model_tools._last_resolved_tool_names)
 
     # Build all child agents on the main thread (thread-safe construction)
@@ -2087,6 +2105,7 @@ def delegate_task(
     finally:
         # Authoritative restore: reset global to parent's tool names after all children built
         _model_tools._last_resolved_tool_names = _parent_tool_names
+        _TOOL_GLOBAL_LOCK.release()
 
     if n_tasks == 1:
         # Single task -- run directly (no thread pool overhead)
