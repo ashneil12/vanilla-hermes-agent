@@ -23,7 +23,7 @@ from agent.ultracode.config import UltracodeConfig
 from agent.ultracode.critic import completeness_critic
 from agent.ultracode.discovery import discover
 from agent.ultracode.ledger import RunLedger
-from agent.ultracode.schema import Finding, StageResult, dedupe_findings
+from agent.ultracode.schema import Finding, StageResult, dedupe_findings, reconcile_findings
 from agent.ultracode.steering import Decision, decide
 from agent.ultracode.planner import Plan, plan as make_plan, replan_for_gaps
 from agent.ultracode.triage import assess
@@ -228,6 +228,13 @@ def run(
     else:
         findings = dedupe_findings(seed_findings + finder_round(0, []))
         stages = pre_stages + ["plan", "find"]
+
+    # root-cause reconciliation: collapse near-duplicate findings (over-generation)
+    if cfg.reconcile:
+        before = len(findings)
+        findings = reconcile_findings(findings)
+        if before != len(findings):
+            caps.append(f"reconciled {before} -> {len(findings)} findings (merged near-duplicates)")
 
     if len(findings) > cfg.max_findings:
         caps.append(f"findings capped at max_findings={cfg.max_findings} (announced)")

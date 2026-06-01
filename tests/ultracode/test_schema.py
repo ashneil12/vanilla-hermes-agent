@@ -63,6 +63,30 @@ def test_dedupe_findings_merges_evidence():
     assert "path A" in leak.evidence and "path B" in leak.evidence
 
 
+def test_reconcile_merges_near_duplicates_keeps_distinct():
+    from agent.ultracode.schema import reconcile_findings
+    fs = [
+        Finding(claim="SQL injection in login via unsanitized username", locator="login query", severity="high"),
+        Finding(claim="SQL injection in login via unsanitized username string", locator="login execute", severity="critical", evidence="extra"),
+        Finding(claim="command injection in run_hook via os.system call", locator="run_hook os.system", severity="critical"),
+    ]
+    out = reconcile_findings(fs)
+    assert len(out) == 2  # the two SQLi-in-login merged; command injection kept
+    sqli = next(f for f in out if "SQL" in f.claim)
+    assert sqli.severity == "critical"  # merge keeps the higher severity
+    assert "extra" in sqli.evidence      # merge unions evidence
+
+
+def test_reconcile_does_not_merge_same_bugtype_different_location():
+    from agent.ultracode.schema import reconcile_findings
+    fs = [
+        Finding(claim="SQL injection via unsanitized input", locator="login()"),
+        Finding(claim="SQL injection via unsanitized input", locator="get_order()"),
+    ]
+    # same wording but DIFFERENT symbols -> must stay separate (distinct bugs)
+    assert len(reconcile_findings(fs)) == 2
+
+
 def test_vote_refuted_follows_verdict():
     v = VerifierVote(VerifyLens.SECURITY, Verdict.REFUTED).validate()
     assert v.refuted is True

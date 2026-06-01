@@ -209,6 +209,54 @@ class StageResult:
         }
 
 
+_STOPWORDS = set(
+    "the a an is are be of to in on for and or with via using that this it its which when where "
+    "if then else not no yes can could would should may might will but as at by from into".split()
+)
+
+
+def _claim_sig(claim: str) -> set:
+    return {w for w in re.findall(r"[a-z0-9]+", (claim or "").lower()) if len(w) > 2 and w not in _STOPWORDS}
+
+
+def _loc_tokens(locator: str) -> set:
+    return {w for w in re.findall(r"[a-z0-9_]+", (locator or "").lower()) if len(w) > 2}
+
+
+def reconcile_findings(findings: List[Finding], *, similarity: float = 0.6) -> List[Finding]:
+    """Root-cause reconciliation: collapse near-duplicate findings (the same bug
+    reported by multiple finders with different wording/locators). Conservative —
+    merges only when claim-signatures are highly similar AND the findings
+    reference an overlapping symbol/locator, so genuinely distinct bugs survive.
+    This is the fix for the over-generation that hurt precision at scale."""
+    out: List[Finding] = []
+    for f in dedupe_findings(findings):  # exact dedup first
+        fsig, floc = _claim_sig(f.claim), _loc_tokens(f.locator)
+        merged = False
+        for g in out:
+            gsig, gloc = _claim_sig(g.claim), _loc_tokens(g.locator)
+            union = fsig | gsig
+            jac = (len(fsig & gsig) / len(union)) if union else 0.0
+            shares_symbol = bool(floc & gloc) or not (floc or gloc)
+            if jac >= similarity and shares_symbol:
+                if f.evidence and f.evidence not in g.evidence:
+                    g.evidence = (g.evidence + " | " + f.evidence).strip(" |")
+                if _sev_rank(f.severity) > _sev_rank(g.severity):
+                    g.severity = f.severity
+                merged = True
+                break
+        if not merged:
+            out.append(f)
+    return out
+
+
+_SEV_ORDER = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+
+
+def _sev_rank(sev: str) -> int:
+    return _SEV_ORDER.get((sev or "info").lower(), 0)
+
+
 def dedupe_findings(findings: List[Finding]) -> List[Finding]:
     """Collapse duplicates by ``dedup_key``, keeping the first occurrence and
     merging evidence from later ones. Used both within a round (across finders)

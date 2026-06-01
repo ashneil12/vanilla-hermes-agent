@@ -30,6 +30,7 @@ class UltracodeConfig:
     max_children: int = 3          # delegate concurrency per wave (fork cap)
     max_finders: int = 6           # finder pool size for discovery
     max_findings: int = 200        # hard ceiling on findings carried forward
+    reconcile: bool = True         # root-cause dedup: merge near-duplicate findings (same bug, different wording) — fixes over-generation hurting precision
 
     # -- adversarial verification --
     verify: bool = True
