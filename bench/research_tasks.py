@@ -68,3 +68,64 @@ _PY310 = BugTask(
 )
 
 RESEARCH_TASKS = [_SOLID, _ACID, _HTTP, _CAP, _PY310]
+
+# --- HARD: recall-at-scale enumeration. Many facts in one answer saturate a single
+# shot's attention; decomposing by sub-area (one finder per category) and unioning
+# the facts is where orchestration earns its cost. These should show ultracode > baseline.
+
+_GOF = BugTask(
+    id="gof23",
+    prompt=("List all 23 Gang of Four design patterns, grouped into the three categories "
+            "(Creational, Structural, Behavioral). Name every pattern in each group."),
+    code="",
+    planted=[
+        # Creational (5)
+        Bug("singleton", "fact", [["singleton"]]),
+        Bug("factory_method", "fact", [["factory method"], ["factory"]]),
+        Bug("abstract_factory", "fact", [["abstract factory"]]),
+        Bug("builder", "fact", [["builder"]]),
+        Bug("prototype", "fact", [["prototype"]]),
+        # Structural (7)
+        Bug("adapter", "fact", [["adapter"]]),
+        Bug("bridge", "fact", [["bridge"]]),
+        Bug("composite", "fact", [["composite"]]),
+        Bug("decorator", "fact", [["decorator"]]),
+        Bug("facade", "fact", [["facade"], ["facade"]]),
+        Bug("flyweight", "fact", [["flyweight"]]),
+        Bug("proxy", "fact", [["proxy"]]),
+        # Behavioral (11)
+        Bug("chain_of_responsibility", "fact", [["chain of responsibility"], ["chain"]]),
+        Bug("command", "fact", [["command"]]),
+        Bug("interpreter", "fact", [["interpreter"]]),
+        Bug("iterator", "fact", [["iterator"]]),
+        Bug("mediator", "fact", [["mediator"]]),
+        Bug("memento", "fact", [["memento"]]),
+        Bug("observer", "fact", [["observer"]]),
+        Bug("state", "fact", [["state"]]),
+        Bug("strategy", "fact", [["strategy"]]),
+        Bug("template_method", "fact", [["template method"], ["template"]]),
+        Bug("visitor", "fact", [["visitor"]]),
+    ],
+)
+
+_12FACTOR = BugTask(
+    id="twelve_factor",
+    prompt="List all twelve factors of the Twelve-Factor App methodology and name each one.",
+    code="",
+    planted=[
+        Bug("codebase", "fact", [["codebase"]]),
+        Bug("dependencies", "fact", [["dependenc"]]),
+        Bug("config", "fact", [["config"]]),
+        Bug("backing_services", "fact", [["backing service"], ["backing"]]),
+        Bug("build_release_run", "fact", [["build", "release", "run"], ["build, release"]]),
+        Bug("processes", "fact", [["process"]]),
+        Bug("port_binding", "fact", [["port binding"], ["port"]]),
+        Bug("concurrency", "fact", [["concurrenc"]]),
+        Bug("disposability", "fact", [["disposab"]]),
+        Bug("dev_prod_parity", "fact", [["dev/prod parity"], ["dev", "prod", "parity"], ["parity"]]),
+        Bug("logs", "fact", [["logs"]]),
+        Bug("admin_processes", "fact", [["admin process"], ["admin"]]),
+    ],
+)
+
+HARD_RESEARCH_TASKS = [_GOF, _12FACTOR]
