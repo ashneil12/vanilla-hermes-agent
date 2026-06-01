@@ -81,15 +81,18 @@ it didn't over-refute true claims.)
 | task | model | baseline R / P | ultracode R / P | cost |
 |---|---|---|---|---|
 | large (120 ln, 21 bugs, dense) | flash | **1.00 / 1.00** | 0.95 / 0.94 | 4k → 288k tok (78×) |
-| large2 (924 ln, 21 bugs, sparse) | flash | **1.00 / 1.00** | _pending_ | 9k → … |
+| large2 (924 ln, 21 bugs, sparse) | flash | **1.00 / 1.00** | 1.00 / 0.94 | 9k → 693k tok (78×) |
 
 The escalation from 40 → 924 lines, dense and sparse, pro and flash, hit the
-**same ceiling every time: single-shot baseline recall 1.00.** On the 120-line
-dense task ultracode was strictly *worse* — it found all 21 pre-verify but a
-single over-zealous skeptic killed a real bug (0.95) and 2 spurious survived, at
-78× cost. (That 1-lens-kill fragility is now fixed: a kill requires ≥2 mechanism-
-backed refutations.) **Even a 924-line file with sparse bugs did not open a recall
-gap** — these models are simply not attention-limited at this scale.
+**same ceiling every time: single-shot baseline recall 1.00, often precision
+1.00.** On the 120-line dense task ultracode was strictly *worse* — a single
+over-zealous skeptic killed a real bug (0.95). That 1-lens-kill fragility is now
+**fixed** (a kill requires ≥2 mechanism-backed refutations), and on large2
+ultracode recall held at 1.00 — but precision was still **0.94 vs the baseline's
+1.00** (over-generation keeps spurious findings the bare model never produced),
+at **78× cost**. **Even a 924-line file with sparse bugs did not open a recall
+gap** — these models are not attention-limited at this scale, so there is nothing
+for orchestration to recover.
 
 ## Real harness issues found (and what I did)
 
