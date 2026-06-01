@@ -257,6 +257,19 @@ def test_harness_discernment_small_findall_stays_light():
     assert not any("discover(loop" in s for s in res.stages)
 
 
+def test_harness_discernment_stays_solo_when_bounded_and_confident():
+    # the cost fix for general-use: a BOUNDED task (not find-all) where triage is
+    # confident (high conf, low stakes, no gaps) terminates at solo — ensembling a
+    # closed-form, already-saturated answer only multiplies cost for zero recall.
+    aux, delegate = _make_harness_fakes(triage_orchestrate=False)
+    res = run("investigate and explain how the retry backoff works", context="<notes>",
+              aux_call_fn=aux, delegate_fn=delegate, enable_ledger=False,
+              config=UltracodeConfig(verify_lenses=[VerifyLens.CORRECTNESS]))
+    assert res.mode == "discerned-solo"           # NOT discerned-light
+    assert res.stages == ["solo-audit", "triage:solo"]
+    assert not any("find(" in s for s in res.stages)   # no finder wave was spawned
+
+
 def test_replan_for_gaps_returns_new_targeted_subtasks():
     from agent.ultracode.planner import replan_for_gaps
 

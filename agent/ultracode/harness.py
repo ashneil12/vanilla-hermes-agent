@@ -199,6 +199,22 @@ def run(
         if led:
             led.event("triage", {"orchestrate": tv.orchestrate, "confidence": tv.confidence,
                                   "stakes": tv.stakes, "gaps": tv.gaps, "reason": tv.reason})
+        # STAY SOLO when triage is confident the single pass already nails it: a
+        # closed-form, low-stakes, gap-free task (e.g. factual recall) saturates on
+        # one pass — escalating to a light ensemble only multiplies cost for zero
+        # recall. Honor the triage signal instead of always ensembling. (The recall
+        # dip that motivated "always ensemble" was on open-ended AUDITS; this guard
+        # is deliberately narrow: high confidence, not high stakes, no named gaps.)
+        if (not tv.orchestrate and not decision.loop_until_dry and tv.confidence >= 0.8
+                and tv.stakes != "high" and not tv.gaps and solo_answer.strip()):
+            res = UltracodeResult(task=task, mode="discerned-solo", answer=solo_answer,
+                                  decision=decision, stages=["solo-audit", "triage:solo"],
+                                  findings=solo_findings,
+                                  caps_announced=[f"discernment: solo suffices (conf={tv.confidence:.2f}, "
+                                                  f"stakes={tv.stakes}); ensembling would add cost, not recall"])
+            if led:
+                led.event("done", res.summary())
+            return res
         seed_findings = solo_findings   # always build ON the solo pass (union -> recall)
         # FULL (loop-until-dry) is reserved for genuinely large, unbounded find-all
         # work; everything else that warrants orchestration gets the cheap LIGHT
