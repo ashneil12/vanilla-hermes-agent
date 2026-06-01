@@ -249,13 +249,30 @@ facts. Its value is gather / compute / verify work a single pass cannot finish**
 it at a closed-form recall question is the same "always full-metal" anti-pattern as
 over-auditing a trivial diff.
 
-**Fix shipped:** the discernment gate had no *solo terminal state* — when triage said
-"solo suffices" it still escalated to a light ensemble (measured: 17–36× cost, 0
-recall gain on 3/5 tasks). Added: a **bounded + confident + low-stakes + no-named-gaps
-task now terminates at `discerned-solo`** (`harness.py`), honoring the triage signal
-that was computed-but-ignored. Guard is deliberately narrow — find-all *audits* still
-light-ensemble, preserving the recall protection that motivated "always ensemble."
-Locked with a unit test (`test_harness_discernment_stays_solo_when_bounded_and_confident`).
+**Fix shipped (three layers, each found by the live weak model exposing the last):**
+1. The discernment gate had no *solo terminal state* — when triage said "solo
+   suffices" it still escalated to a light ensemble. Added a `discerned-solo` terminus.
+2. Gating on the triage **confidence scalar** failed: the weak model hedges even on
+   trivial recall. Re-gated on the **concrete gap-list** — "an ensemble is justified
+   only if you can NAME what solo missed" — plus a **no-material** rule: a named gap
+   over near-zero context is just N redundant re-answers, so it can't add recall.
+3. Still firing `discerned-light`: root-caused to the `find_all` regex matching the
+   bare word **"each"** in *"explain what each means"* → a spurious loop-until-dry
+   shape. Tightened it to require enumeration *intent* (`find all`/`list all`/`every X`…).
+
+**Measured before → after (live flash, 5 factual tasks, recall held at 1.00):**
+
+| | mode | tokens |
+|---|---|---|
+| before | 3/5 `discerned-light`, 2/5 `solo` | **~95k** |
+| after | 5/5 `solo` / `discerned-solo` | **~2k (≈47× cheaper)** |
+
+Guard stays deliberately narrow — find-all *audits* still light-ensemble, preserving
+the recall protection that motivated "always ensemble." Locked with a unit test
+(`test_harness_discernment_stays_solo_when_bounded_and_confident`). The broader lesson:
+**you cannot trust a weak model's introspection (confidence, gap-naming) to control
+cost — the robust levers are structural** (task shape, material size, named-gap
+presence), and only a live weak model surfaces where the keyword heuristics misfire.
 
 ## Status of the "honest next steps" above
 
