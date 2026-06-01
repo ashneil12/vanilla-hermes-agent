@@ -21,8 +21,9 @@ from bench.deepseek_client import DeepSeekClient
 from bench.scorer import aggregate, score
 from bench.tasks import ALL_TASKS, total_planted
 from bench.large_task import BUG_TASK as _LARGE, BUG_TASK_LARGE2 as _LARGE2
+from bench.real_task import REAL_TASK as _REAL, AVAILABLE as _REAL_OK
 
-_POOL = ALL_TASKS + [_LARGE, _LARGE2]
+_POOL = ALL_TASKS + [_LARGE, _LARGE2] + ([_REAL] if _REAL_OK else [])
 
 
 def _cfg() -> UltracodeConfig:
@@ -39,6 +40,7 @@ def main():
     ap.add_argument("--tasks", default="")
     ap.add_argument("--out", default="bench/results/run")
     ap.add_argument("--model", default="deepseek-v4-pro")
+    ap.add_argument("--force", action="store_true", help="force full orchestration (bypass discernment) for A/B")
     args = ap.parse_args()
 
     tasks = _POOL
@@ -72,7 +74,7 @@ def main():
         res = ultracode_run(
             task.prompt, context=task.code,
             delegate_fn=cu.delegate_fn, aux_call_fn=cu.aux_call_fn,
-            config=_cfg(), force_orchestrate=True, run_id=f"bench-{task.id}",
+            config=_cfg(), force_orchestrate=(True if args.force else None), run_id=f"bench-{task.id}",
         )
         ut = time.time() - t0
         us = score(res.survivors, task)       # what ultracode stands behind (verified)
