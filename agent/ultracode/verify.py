@@ -20,6 +20,7 @@ thread-safe) and §1 (verifiers as siblings dodge the depth=1 nesting cap).
 
 from __future__ import annotations
 
+from collections import defaultdict
 from typing import Any, Callable, Dict, List, Optional
 
 from agent.ultracode.adapters import delegate_fanout, extract_json
@@ -115,36 +116,53 @@ def verify_findings(
             f.survived = True if not lenses else f.survived
         return findings
 
-    n_lenses = len(lenses)
-    # Build one sibling subagent task per (finding, lens), in a stable order.
+    # VOI triage: concentrate lenses where being wrong is costly. critical/high
+    # get every lens; medium two; low/info one. Conservation of rigor — and a big
+    # cost cut at scale (a 12-finding mix drops from 36 skeptics to ~half).
+    def _lenses_for(severity: str) -> List[VerifyLens]:
+        if not cfg.voi_verify:
+            return lenses
+        s = (severity or "info").strip().lower()
+        if s in ("critical", "high"):
+            return lenses
+        if s == "medium":
+            return lenses[:2] or lenses
+        return lenses[:1] or lenses
+
+    # Build one sibling subagent task per (finding, lens); track the mapping so
+    # variable per-finding lens counts re-assemble correctly.
     tasks: List[Dict[str, Any]] = []
-    for f in findings:
-        for lens in lenses:
+    task_map: List[tuple] = []  # (finding_index, lens)
+    for fi, f in enumerate(findings):
+        for lens in _lenses_for(f.severity):
             t: Dict[str, Any] = {"goal": _skeptic_prompt(f, lens, context)}
             if toolsets is not None:
                 t["toolsets"] = list(toolsets)
             tasks.append(t)
+            task_map.append((fi, lens))
+
+    if not tasks:
+        for f in findings:
+            f.survived = True
+        return findings
 
     results = delegate_fanout(
-        tasks,
-        parent_agent=parent_agent,
-        role="leaf",
-        max_children=cfg.max_children,
-        concurrency=concurrency,
-        delegate_fn=delegate_fn,
+        tasks, parent_agent=parent_agent, role="leaf",
+        max_children=cfg.max_children, concurrency=concurrency, delegate_fn=delegate_fn,
     )
-    # delegate_fanout preserves global submission order, so result i maps to
-    # (finding i // n_lenses, lens i % n_lenses).
     by_index: Dict[int, Dict[str, Any]] = {}
     for entry in results:
         if isinstance(entry, dict):
             by_index[int(entry.get("task_index", len(by_index)))] = entry
 
-    quorum = cfg.effective_quorum(n_lenses)
+    votes_by_finding: Dict[int, List[VerifierVote]] = defaultdict(list)
+    for i, (fi, lens) in enumerate(task_map):
+        votes_by_finding[fi].append(_vote_from_result(by_index.get(i, {}), lens))
+
     for fi, finding in enumerate(findings):
-        votes = [_vote_from_result(by_index.get(fi * n_lenses + li, {}), lens) for li, lens in enumerate(lenses)]
+        votes = votes_by_finding.get(fi, [])
         finding.votes = votes
-        # only mechanism-backed verdicts count (abstains are PARTIAL, see _vote_from_result)
+        quorum = cfg.effective_quorum(len(votes)) if votes else 1  # majority of the lenses actually run
         confirms = sum(1 for v in votes if v.verdict == Verdict.CONFIRMED)
         kills = sum(1 for v in votes if v.verdict == Verdict.REFUTED)
         if survival_mode == "prove":

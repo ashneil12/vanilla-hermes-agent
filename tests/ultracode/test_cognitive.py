@@ -226,3 +226,33 @@ def test_replan_for_gaps_returns_new_targeted_subtasks():
 def test_replan_empty_signals_dry():
     from agent.ultracode.planner import replan_for_gaps
     assert replan_for_gaps("x", [], aux_call_fn=lambda **k: json.dumps({"subtasks": []})) == []
+
+
+def _confirm_all(*, tasks, parent_agent, role):
+    return json.dumps({"results": [{"task_index": i, "status": "completed",
+                                    "summary": json.dumps({"verdict": "confirmed", "rationale": "m"})} for i in range(len(tasks))]})
+
+
+def test_voi_severity_weighted_lens_count():
+    # VOI: critical gets all 3 lenses, low gets 1 — fewer skeptic calls where cheap.
+    crit = Finding(claim="rce", locator="a:1", severity="critical")
+    med = Finding(claim="leak", locator="b:2", severity="medium")
+    low = Finding(claim="nit", locator="c:3", severity="low")
+    calls = {"n": 0}
+
+    def fn(*, tasks, parent_agent, role):
+        calls["n"] += len(tasks)
+        return _confirm_all(tasks=tasks, parent_agent=parent_agent, role=role)
+
+    cfg = UltracodeConfig(verify_lenses=[VerifyLens.CORRECTNESS, VerifyLens.SECURITY, VerifyLens.REPRODUCES])
+    verify_findings([crit, med, low], config=cfg, delegate_fn=fn)
+    assert len(crit.votes) == 3 and len(med.votes) == 2 and len(low.votes) == 1
+    assert calls["n"] == 6  # 3+2+1, not 9 — a 33% skeptic-call cut on this mix
+    assert all(f.survived for f in (crit, med, low))  # all confirmed -> all survive
+
+
+def test_voi_off_uses_all_lenses_uniformly():
+    low = Finding(claim="nit", locator="c:3", severity="low")
+    cfg = UltracodeConfig(voi_verify=False, verify_lenses=[VerifyLens.CORRECTNESS, VerifyLens.SECURITY, VerifyLens.REPRODUCES])
+    verify_findings([low], config=cfg, delegate_fn=_confirm_all)
+    assert len(low.votes) == 3
