@@ -130,6 +130,42 @@ def run_job(cmd):
     os.system(cmd)                                       # BUG: command injection
 '''
 
+def _filler(start, count):
+    """Generate `count` plausible, CORRECT helper functions — the haystack the
+    bugs hide in. All are genuinely bug-free so they should NOT be flagged."""
+    templates = [
+        "def util_{n}(items):\n    return [x for x in items if x is not None]",
+        "def util_{n}(a, b):\n    return a if a > b else b",
+        "def util_{n}(s):\n    return s.strip().lower()",
+        "def util_{n}(d, key, default=None):\n    return d.get(key, default)",
+        "def util_{n}(xs):\n    total = 0\n    for x in xs:\n        total += x\n    return total",
+        "def util_{n}(text):\n    return len(text.split())",
+        "def util_{n}(n):\n    return n * (n + 1) // 2",
+        "def util_{n}(seq):\n    return list(reversed(seq))",
+        "def util_{n}(a, b):\n    return {{'sum': a + b, 'diff': a - b}}",
+        "def util_{n}(xs):\n    return sorted(set(xs))",
+        "def util_{n}(s, n):\n    return s[:n] if len(s) > n else s",
+        "def util_{n}(d):\n    return {{k: v for k, v in d.items() if v}}",
+    ]
+    return "\n\n".join(templates[(start + i) % len(templates)].format(n=start + i) for i in range(count))
+
+
+def _make_large2():
+    """Scatter the 21 buggy functions through ~60 correct filler functions, so
+    bugs are SPARSE (~1 per 30 lines) in a ~700-line mostly-correct file — the
+    needle-in-haystack regime that actually stresses single-shot recall."""
+    parts = _CODE.split("# =====================")
+    out = [parts[0], _filler(0, 45)]
+    fi = 45
+    for chunk in parts[1:]:
+        out.append("# =====================" + chunk)
+        out.append(_filler(fi, 40))
+        fi += 40
+    return "\n\n".join(out)
+
+
+_CODE_LARGE2 = _make_large2()
+
 BUG_TASK = BugTask(
     id="large",
     prompt="Audit this multi-module Python service and find ALL real security and correctness bugs. Ignore pure style nits.",
@@ -157,4 +193,12 @@ BUG_TASK = BugTask(
         Bug("bare_except", "low", [["bare except"], ["except", "swallow"], ["broad except"]]),
         Bug("command_injection", "critical", [["command inject"], ["os.system"], ["run_job", "inject"]]),
     ],
+)
+
+# Same 21 bugs, but SPARSE in a ~700-line mostly-correct file (needle-in-haystack).
+BUG_TASK_LARGE2 = BugTask(
+    id="large2",
+    prompt="Audit this large multi-module Python service and find ALL real security and correctness bugs. The codebase is mostly correct; the bugs are sparse. Ignore pure style nits.",
+    code=_CODE_LARGE2,
+    planted=BUG_TASK.planted,
 )

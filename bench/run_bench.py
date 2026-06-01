@@ -20,9 +20,9 @@ from bench.baseline import baseline_find
 from bench.deepseek_client import DeepSeekClient
 from bench.scorer import aggregate, score
 from bench.tasks import ALL_TASKS, total_planted
-from bench.large_task import BUG_TASK as _LARGE
+from bench.large_task import BUG_TASK as _LARGE, BUG_TASK_LARGE2 as _LARGE2
 
-_POOL = ALL_TASKS + [_LARGE]
+_POOL = ALL_TASKS + [_LARGE, _LARGE2]
 
 
 def _cfg() -> UltracodeConfig:
