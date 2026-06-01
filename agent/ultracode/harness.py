@@ -25,9 +25,9 @@ from agent.ultracode.discovery import discover
 from agent.ultracode.ledger import RunLedger
 from agent.ultracode.schema import Finding, StageResult, dedupe_findings, reconcile_findings
 from agent.ultracode.steering import Decision, decide
-from agent.ultracode.planner import Plan, plan as make_plan, replan_for_gaps
+from agent.ultracode.planner import Approach, Plan, plan as make_plan, plan_approach, replan_for_gaps
 from agent.ultracode.triage import assess
-from agent.ultracode.kinds import TaskKind, classify_kind, worker_instruction
+from agent.ultracode.kinds import TaskKind, classify_kind, skeptic_instruction, worker_instruction
 from agent.ultracode.judge import judge_panel
 from agent.ultracode.verify import survivors as _survivors, verify_findings
 
@@ -55,14 +55,14 @@ class UltracodeResult:
         }
 
 
-def _finder_prompt(goal: str, context: str, sub_context: str, avoid: List[Finding], kind: str = TaskKind.CODE) -> str:
+def _finder_prompt(goal: str, context: str, sub_context: str, avoid: List[Finding], directive: str) -> str:
     avoid_block = ""
     if avoid:
         listed = "\n".join(f"- {f.claim} ({f.locator})" for f in avoid[:40])
         avoid_block = f"\nALREADY FOUND (do NOT repeat these; find only NEW, distinct items):\n{listed}\n"
     return (
         f"You are an expert worker. MANDATE: {goal}\n"
-        f"{worker_instruction(kind)}\n"
+        f"{directive}\n"
         f"{('FOCUS: ' + sub_context + chr(10)) if sub_context else ''}"
         f"\nMATERIAL:\n{context}\n"
         f"{avoid_block}\n"
@@ -207,9 +207,36 @@ def run(
         light = not go_full
         pre_stages = ["solo-audit", "triage:" + ("full" if go_full else "light")]
 
-    # --- plan (work-list before fan-out) -------------------------------------
-    plan = make_plan(task, decision, context="", config=cfg, agent=agent, aux_call_fn=aux_call_fn, model=model)
+    # --- AGENT-REASONED APPROACH: the agent decides its OWN method end-to-end --
+    # (shape, decomposition, what workers produce, and what VERIFICATION means for
+    # this task). The hardcoded kinds.py is only the fallback when the model can't
+    # produce a usable plan. This is "figure it out like I do", not a recipe book.
+    approach = plan_approach(task, context_size=len(context), max_subtasks=cfg.max_finders,
+                             aux_call_fn=aux_call_fn, agent=agent, model=model)
+    worker_directive = approach.worker_directive if approach.ok else worker_instruction(tkind)
+    skeptic_directive = approach.skeptic_directive if approach.ok else skeptic_instruction(tkind)
+    if led:
+        led.event("approach", {"ok": approach.ok, "shape": approach.shape, "reasoning": approach.reasoning[:200]})
+
+    # the agent may decide the work is open-ended -> judge-panel
+    if approach.ok and approach.shape == "judge_panel":
+        jr = judge_panel(task, context=context, n=cfg.max_finders, delegate_fn=delegate_fn,
+                         aux_call_fn=aux_call_fn, config=cfg, agent=agent, model=model)
+        res = UltracodeResult(task=task, mode="judge-panel", answer=jr.answer, decision=decision,
+                              stages=pre_stages + ["approach", "judge-panel"],
+                              caps_announced=[f"agent chose judge-panel; winner={jr.winner_angle}"])
+        if led:
+            led.event("done", res.summary())
+        return res
+
+    # --- plan: the agent's own work-list, or the planner as fallback ----------
+    if approach.ok and approach.subtasks:
+        plan = Plan(subtasks=approach.subtasks, rationale=approach.reasoning, delegated=len(approach.subtasks) > 1)
+    else:
+        plan = make_plan(task, decision, context="", config=cfg, agent=agent, aux_call_fn=aux_call_fn, model=model)
     caps = list(plan.caps_announced)
+    if approach.ok:
+        caps.append(f"agent-reasoned approach (shape={approach.shape}): {approach.reasoning[:140]}")
     if seed_findings:
         caps.append(f"discernment: escalated, seeded orchestration with {len(seed_findings)} solo finding(s)")
     if led:
@@ -228,7 +255,7 @@ def run(
                                        aux_call_fn=aux_call_fn, agent=agent, model=model)
             if not subtasks:
                 return []  # planner declares the surface exhausted -> contributes to dry
-        tasks = [{"goal": _finder_prompt(st.goal, context, st.context, known, tkind)} for st in subtasks]
+        tasks = [{"goal": _finder_prompt(st.goal, context, st.context, known, worker_directive)} for st in subtasks]
         results = delegate_fanout(tasks, parent_agent=agent, max_children=cfg.max_children,
                                   concurrency=cfg.concurrency, delegate_fn=delegate_fn)
         found: List[Finding] = []
@@ -237,7 +264,9 @@ def run(
             found.extend(_parse_findings(entry if isinstance(entry, dict) else {}, f"r{round_idx}:{label}"))
         return found
 
-    effective_loop = decision.loop_until_dry and not light  # light = single wave, no loop
+    # loop if the AGENT chose 'loop' (or, in fallback, the heuristic said find-all); light caps it
+    want_loop = (approach.shape == "loop") if approach.ok else decision.loop_until_dry
+    effective_loop = want_loop and not light
     if effective_loop:
         report = discover(finder_round, config=cfg, seen_keys={f.dedup_key() for f in seed_findings})
         findings = dedupe_findings(seed_findings + report.findings)
@@ -266,7 +295,7 @@ def run(
     # --- adversarially verify: independent skeptics, default-to-refuted -------
     if decision.verify and findings:
         verify_findings(findings, context=context, parent_agent=agent, config=cfg, lenses=decision.lenses,
-                        delegate_fn=verify_delegate_fn, concurrency=cfg.concurrency, kind=tkind)
+                        delegate_fn=verify_delegate_fn, concurrency=cfg.concurrency, skeptic_directive=skeptic_directive)
         stages.append(f"verify({len(decision.lenses)} lenses, quorum {cfg.effective_quorum(len(decision.lenses))})")
         survs = _survivors(findings)
     else:

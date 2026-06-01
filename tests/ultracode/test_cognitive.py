@@ -274,6 +274,29 @@ def test_replan_empty_signals_dry():
     assert replan_for_gaps("x", [], aux_call_fn=lambda **k: json.dumps({"subtasks": []})) == []
 
 
+def test_plan_approach_agent_decides_its_own_method():
+    from agent.ultracode.planner import plan_approach
+
+    def aux(**kwargs):
+        assert "ultracode orchestrator" in kwargs["messages"][0]["content"].lower()
+        return json.dumps({"reasoning": "research task; decompose by protocol generation",
+                           "shape": "parallel", "worker_directive": "report only sourced factual claims",
+                           "skeptic_directive": "check the cited source actually supports the claim",
+                           "synthesis_directive": "lead with the key difference",
+                           "subtasks": [{"goal": "HTTP/2 changes"}, {"goal": "HTTP/3 changes"}]})
+
+    a = plan_approach("compare HTTP versions", aux_call_fn=aux)
+    assert a.ok and a.shape == "parallel" and len(a.subtasks) == 2
+    assert "sourced" in a.worker_directive          # the agent decided what workers produce
+    assert "source" in a.skeptic_directive           # the agent decided what verification MEANS
+
+
+def test_plan_approach_falls_back_when_model_cant_plan():
+    from agent.ultracode.planner import plan_approach
+    a = plan_approach("x", aux_call_fn=lambda **k: "not json at all")
+    assert a.ok is False  # harness then uses the kinds.py heuristic default
+
+
 def _confirm_all(*, tasks, parent_agent, role):
     return json.dumps({"results": [{"task_index": i, "status": "completed",
                                     "summary": json.dumps({"verdict": "confirmed", "rationale": "m"})} for i in range(len(tasks))]})

@@ -120,6 +120,82 @@ def plan(
     )
 
 
+@dataclass
+class Approach:
+    """The agent's self-determined method for a task — reasoned end-to-end, not
+    prescribed. This is the difference between an intelligent agent and a recipe
+    book: it decides the shape, decomposition, what workers produce, and what
+    VERIFICATION even means for THIS task."""
+    reasoning: str = ""
+    shape: str = "parallel"   # solo | parallel | loop | judge_panel
+    subtasks: List[SubtaskSpec] = field(default_factory=list)
+    worker_directive: str = ""    # what each worker should produce + how (agent's own words)
+    skeptic_directive: str = ""   # what a verifier should check for this task (agent's own words)
+    synthesis_directive: str = ""
+    ok: bool = False              # False => fall back to the heuristic kinds.py defaults
+
+
+_APPROACH_SYSTEM = (
+    "You are an ultracode orchestrator. Given ANY task, REASON OUT your complete approach end-to-end the way "
+    "an expert would — do NOT follow a fixed template. Think for yourself: what is the real nature of this "
+    "work? What orchestration shape fits (solo for bounded/coupled; parallel fan-out for independent units; "
+    "loop for unbounded 'find-all'; judge-panel for open-ended/creative)? How do you cut it into independent "
+    "sub-tasks (the work-list)? What should each worker actually produce, and how? And crucially: what does "
+    "VERIFICATION mean for THIS task — what would a skeptic check to know a result is real (a bug's mechanism? "
+    "a claim's source? an argument's logic? a design's failure mode?)? Decide all of it yourself."
+)
+
+
+def plan_approach(
+    task: str,
+    *,
+    context_size: int = 0,
+    max_subtasks: int = 4,
+    aux_call_fn: Optional[Callable[..., Any]] = None,
+    agent: Any = None,
+    model: Optional[str] = None,
+) -> Approach:
+    """The agent decides its OWN method for the task (shape, decomposition, worker
+    directive, what verification means). Falls back (ok=False) to heuristic
+    defaults if the model can't produce a usable plan."""
+    user = (
+        f"TASK:\n{task}\n\nInput material is ~{context_size} chars.\n\n"
+        f"Decide your approach. Use at most {max_subtasks} sub-tasks (decompose by the problem-native axis, "
+        "not by surface unit).\n"
+        'Reply with ONLY JSON: {"reasoning":"<how you are thinking about this>", '
+        '"shape":"solo|parallel|loop|judge_panel", '
+        '"worker_directive":"<exactly what each worker should produce and how>", '
+        '"skeptic_directive":"<exactly what a verifier should check to know a result is real for THIS task>", '
+        '"synthesis_directive":"<how to combine into the final answer>", '
+        '"subtasks":[{"goal":"<self-contained mandate>","context":"<focus>"}]}'
+    )
+    try:
+        text = aux_call(
+            [{"role": "system", "content": _APPROACH_SYSTEM}, {"role": "user", "content": user}],
+            model=model, temperature=0.3, max_tokens=2000,
+            main_runtime=runtime_from_agent(agent), call_fn=aux_call_fn,
+        )
+    except Exception:
+        return Approach()
+    parsed = extract_json(text)
+    if not isinstance(parsed, dict) or not parsed.get("worker_directive"):
+        return Approach()
+    subs = []
+    for it in (parsed.get("subtasks") or [])[:max_subtasks]:
+        if isinstance(it, dict) and str(it.get("goal", "")).strip():
+            subs.append(SubtaskSpec(goal=str(it["goal"]).strip(), context=str(it.get("context", "")).strip()).validate())
+    shape = str(parsed.get("shape", "parallel")).strip().lower()
+    if shape not in ("solo", "parallel", "loop", "judge_panel"):
+        shape = "parallel"
+    return Approach(
+        reasoning=str(parsed.get("reasoning", "")).strip(), shape=shape, subtasks=subs,
+        worker_directive=str(parsed.get("worker_directive", "")).strip(),
+        skeptic_directive=str(parsed.get("skeptic_directive", "")).strip(),
+        synthesis_directive=str(parsed.get("synthesis_directive", "")).strip(),
+        ok=bool(subs and parsed.get("worker_directive")),
+    )
+
+
 _REPLAN_SYSTEM = (
     "You are RE-PLANNING a live investigation. Given what has ALREADY been found, your job is to find "
     "what is STILL MISSING — areas, hypotheses, or bug-classes not yet investigated. Emit NEW, targeted "
