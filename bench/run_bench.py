@@ -20,6 +20,9 @@ from bench.baseline import baseline_find
 from bench.deepseek_client import DeepSeekClient
 from bench.scorer import aggregate, score
 from bench.tasks import ALL_TASKS, total_planted
+from bench.large_task import BUG_TASK as _LARGE
+
+_POOL = ALL_TASKS + [_LARGE]
 
 
 def _cfg() -> UltracodeConfig:
@@ -38,10 +41,10 @@ def main():
     ap.add_argument("--model", default="deepseek-v4-pro")
     args = ap.parse_args()
 
-    tasks = ALL_TASKS
+    tasks = _POOL
     if args.tasks:
         want = set(args.tasks.split(","))
-        tasks = [t for t in ALL_TASKS if t.id in want]
+        tasks = [t for t in _POOL if t.id in want]
 
     rows = []
     base_scores, ultra_surv_scores, ultra_all_scores = [], [], []
