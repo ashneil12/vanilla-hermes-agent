@@ -1,0 +1,229 @@
+{
+  "summary": "Claude audits the same 24 saleor files as the harness — the gold-standard reference",
+  "agentCount": 23,
+  "logs": [],
+  "result": {
+    "files": 22,
+    "raw_count": 19,
+    "raw": [
+      {
+        "claim": "Production superuser creation routes through an explicitly insecure, test-only fixture (dangerously_get_or_create_superuser) that lives in the tests namespace and is documented as \"should never be called for production use (due to lack of validation)\". This replaces Django's stock UserManager.create_superuser() and pulls test code into a production code path, defeating the safeguards (namespace isolation + 'dangerously_' naming) intended to prevent exactly this.",
+        "locator": "saleor/account/management/commands/createsuperuser.py:224",
+        "severity": "high",
+        "evidence": "Line 18 imports `from ...tests.fixtures.user import dangerously_get_or_create_superuser`; line 224 calls `_superuser, created = dangerously_get_or_create_superuser(**user_data)`. The fixture (saleor/account/tests/fixtures/user.py:9-26 and 29-56) carries the docstring \"This should never be called for production use (due to lack of validation)\" and silences the Semgrep unvalidated-password rule via `# nosemgrep: python.django.security.audit.unvalidated-password.unvalidated-password` (user.py:52). The standard secure call (`User._default_manager.create_superuser`) was removed."
+      },
+      {
+        "claim": "Non-interactive (--noinput) mode applies NO password strength validation before persisting the superuser password. The password is taken from DJANGO_SUPERUSER_PASSWORD and handed straight to the insecure fixture, which calls set_password() with the Semgrep unvalidated-password check explicitly silenced. A trivially weak superuser password (e.g. '1') is accepted and saved without any validate_password() call.",
+        "locator": "saleor/account/management/commands/createsuperuser.py:196",
+        "severity": "medium",
+        "evidence": "Lines 192-196: `user_data[PASSWORD_FIELD] = os.environ[\"DJANGO_SUPERUSER_PASSWORD\"]` with no validate_password() in the else/non-interactive branch (contrast interactive branch which calls `validate_password(...)` at line 180). The value flows to dangerously_get_or_create_superuser at line 224, whose set_password is guarded by `# nosemgrep ... unvalidated-password` (saleor/account/tests/fixtures/user.py:52). Result: arbitrarily weak superuser credentials are persisted silently."
+      },
+      {
+        "claim": "Logic/correctness bug: when a user with the same email already exists, dangerously_get_or_create_superuser returns (existing_user, False) and silently does nothing — it does NOT update the password, is_staff, is_superuser, or group membership. The command then prints 'user already exists' and exits 1, so an operator's attempt to (re)provision a superuser fails silently with no privilege change, which can mask incomplete setup. The function name says 'create' but its get-or-create semantics differ from Django's create_superuser (which raises IntegrityError on duplicates), so behavior is surprising and unflagged.",
+        "locator": "saleor/account/management/commands/createsuperuser.py:224",
+        "severity": "low",
+        "evidence": "saleor/account/tests/fixtures/user.py:17-18: `if user := User.objects.filter(email=email).first(): return user, False` — returns existing user untouched. createsuperuser.py:227-231 then writes 'The operation was aborted: user already exists in database.' and `sys.exit(1)`. No password/permission reconciliation occurs for the existing account."
+      },
+      {
+        "claim": "Email-normalization mismatch causes a TOCTOU-style uniqueness gap. The command's uniqueness pre-check (_validate_username) and the fixture's existence check use the RAW email, but the row is inserted with a domain-lowercased email (UserManager.normalize_email). An email differing only by domain case (e.g. User@EXAMPLE.com) passes the 'already taken' check yet may collide on the unique email constraint at save time, raising an unhandled IntegrityError instead of the intended friendly 'already exists' handling.",
+        "locator": "saleor/account/management/commands/createsuperuser.py:207",
+        "severity": "low",
+        "evidence": "createsuperuser.py:207-209 and 270-278 validate uniqueness via get_by_natural_key / filter on the raw username; the fixture also filters on the raw email (saleor/account/tests/fixtures/user.py:17) but then normalizes before insert: `email = UserManager.normalize_email(email)` (user.py:37) prior to `user.save()` (user.py:55). Because the lookups precede normalization, the pre-insert duplicate check and the actual unique(email) column can disagree on domain casing."
+      },
+      {
+        "claim": "send_set_password_notification generates the set-password token twice via two independent token_generator.make_token(user) calls, so the token embedded in password_set_url and the standalone \"token\" payload field are NOT guaranteed to be the same value. Django's configured PasswordResetTokenGenerator (settings.TOKEN_GENERATOR_CLASS) embeds a per-second timestamp in the token, so when the two calls straddle a 1-second boundary they produce different tokens. The resulting notification can contain a link token that differs from the displayed/standalone token, and depending on which the recipient or template uses, token validation (SetPassword._set_password_for_user -> token_generator.check_token) may fail. Every other function in this file (send_account_confirmation line 72-81, send_account_delete_confirmation_notification line 153-162) correctly computes the token once and reuses the same variable, confirming this is an unintended bug rather than the intended pattern.",
+        "locator": "saleor/account/notifications.py:187",
+        "severity": "medium",
+        "evidence": "Line 182: `token = token_generator.make_token(user)` is used to build params/password_set_url (lines 183-184, 189). Line 187 independently re-generates: `\"token\": token_generator.make_token(user),` instead of reusing the `token` variable. PasswordResetTokenGenerator.make_token uses a per-second timestamp, so the two calls can yield different tokens. Contrast with send_account_delete_confirmation_notification where `user_token` is computed once (line 153) and reused for both the URL (line 156) and the payload field (line 161)."
+      },
+      {
+        "claim": "Latent NoneType dereference / unhandled race in trigger_send_password_reset_notification: the user is fetched with `.filter(pk=user_pk).first()` (returns None when no row matches) and then `cast(User, user)` — but typing.cast is purely a type-checker hint and performs NO runtime check or conversion. If the user referenced by user_pk is deleted between when the Celery task is enqueued (in RequestPasswordReset.perform_mutation, request_password_reset.py:104) and when the worker runs it — a real TOCTOU window for async tasks — `user` is None and the very next dereference `user.is_staff` (line 38) raises AttributeError, crashing the task. The early-return guard at line 32 only covers a falsy user_pk, not a non-existent user. This is inconsistent with the sibling task finish_creating_user (line 87) which uses `User.objects.get(pk=user_pk)` and would instead raise a clean DoesNotExist.",
+        "locator": "saleor/account/tasks.py:35",
+        "severity": "low",
+        "evidence": "Line 35: `user = User.objects.filter(pk=user_pk).first()` can return None; Line 36: `user = cast(User, user)` is a no-op at runtime (typing.cast does not validate); Line 38: `if not channel_slug and not user.is_staff:` dereferences user -> AttributeError on None. Guard at lines 32-33 only checks `if not user_pk`. Contrast line 87: `user = User.objects.get(pk=user_pk)`. Reachable because callers pass a stale pk asynchronously (request_password_reset.py:104-108 enqueues with user.pk)."
+      },
+      {
+        "claim": "Per-IP throttling can be trivially bypassed via a spoofed X-Forwarded-For header. The throttling identity is derived from get_client_ip(request), which trusts the client-supplied X-Forwarded-For header and returns the first syntactically-valid IP without verifying the request came from a trusted reverse proxy (no NUM_PROXIES / trusted-proxy config exists). An attacker can send a different fabricated IP on each request, landing in a fresh cache bucket every time, so the anti-credential-stuffing (case A) and anti-brute-force (case B) blocks at lines 30-34/56/64-73 never accumulate. This defeats the entire security purpose of the module.",
+        "locator": "saleor/account/throttling.py:22",
+        "severity": "high",
+        "evidence": "ip = get_client_ip(request) -> core/utils get_client_ip reads request.META.get('HTTP_X_FORWARDED_FOR','') and returns the first is_valid_ipv4/ipv6 token with no trusted-proxy check; cache keys at lines 78-87 embed this attacker-controlled ip, so rotating XFF yields unlimited fresh throttle buckets."
+      },
+      {
+        "claim": "Username/account enumeration via a login timing side-channel. When the email does not resolve to a user, the code builds an empty models.User() (line 51) and calls user.check_password(password) (line 53). Django's check_password on a User with no usable password hash short-circuits and returns False without running the configured (slow) password hasher, whereas an existing user runs the full PBKDF2/Argon2 verification. The measurable response-time difference lets an attacker enumerate valid accounts. The empty User() was added specifically to make the code path 'look' uniform, but it does not equalize timing.",
+        "locator": "saleor/account/throttling.py:51",
+        "severity": "medium",
+        "evidence": "if not user: user_exists = False; user = models.User(); correct_password = user.check_password(password) -- a fresh User() has an empty/unusable password, so check_password returns fast; existing users run the full hasher, producing a timing oracle for account existence."
+      },
+      {
+        "claim": "Per-user brute-force protection (case B) is silently disabled for non-existent accounts and for the very first failed attempt of a user, weakening the documented anti-brute-force control. The ip_user counter is only incremented when user_exists is True (the increment at line 64 is inside the `if user_exists:` block starting line 55). Combined with the enumeration oracle above, an attacker who has confirmed an account exists still benefits from the slower per-user ramp, but for unknown/guessed usernames only the coarse per-IP (case A, increments every 10 attempts) applies, contradicting the stated brute-force defense.",
+        "locator": "saleor/account/throttling.py:55",
+        "severity": "low",
+        "evidence": "if user_exists: ... ip_user_attempts_count = increment_attempt(ip_user_key) -- the per-user (case B) counter is gated entirely behind user existence, so brute-force attempts against valid-but-unconfirmed or non-existent usernames bypass the stricter per-attempt delay schedule."
+      },
+      {
+        "claim": "Non-atomic counter update in increment_attempt creates a race condition and a potential ValueError. cache.add followed by cache.incr is not atomic: under concurrent failed logins two callers can both see add() fail and then both incr, or the key can expire between add and incr causing cache.incr to raise ValueError (most Django cache backends raise on missing keys). Lost increments undercount attempts (weakening throttling); the exception path can crash the login request. The concurrency comment at line 33 only protects the block key, not this counter.",
+        "locator": "saleor/account/throttling.py:143",
+        "severity": "low",
+        "evidence": "if not cache.add(key, 1, timeout=ATTEMPT_COUNTER_EXPIRE_TIME): return cache.incr(key, 1) -- add+incr is a non-atomic read-modify-write; key expiry between the two calls makes cache.incr raise ValueError on backends like locmem/memcached, and concurrent requests can lose increments."
+      },
+      {
+        "claim": "Operator-precedence bug causes unhandled AttributeError (crash / DoS) on unparseable phone input instead of a clean ValidationError. The intended null-guard does not cover phone_number.is_valid().",
+        "locator": "saleor/account/validators.py:13",
+        "severity": "medium",
+        "evidence": "The condition `phone_number and not is_possible_number(phone_number) or not phone_number.is_valid()` parses (since `and` binds tighter than `or`) as `(phone_number and not is_possible_number(phone_number)) or (not phone_number.is_valid())`. When `to_python(phone, country)` returns None/falsy (unparseable input), the first AND clause short-circuits to a falsy value, forcing evaluation of the OR's right side `not phone_number.is_valid()`. With phone_number=None this raises AttributeError: 'NoneType' object has no attribute 'is_valid' rather than raising ValidationError(INVALID). The leading `phone_number and` guard fails to protect the .is_valid() dereference. Attacker-controlled phone input that fails parsing yields an unhandled exception (500), an input-validation/availability defect."
+      },
+      {
+        "claim": "format_value() violates Django's ChoiceWidget/Select API contract by returning a single string (value[0]) instead of the list that the parent class always returns, and indexes [0] without guarding against an empty list. Django's Select inherits ChoiceWidget.format_value, which always returns a list of strings; downstream rendering machinery (get_context -> options -> optgroups) iterates over format_value()'s result to compute selected choices. Returning value[0] (a bare string) makes that downstream code iterate over the characters of the string instead of the list of selected values, so 'selected' matching for multi-character values (e.g. a country-area code like 'CA') is computed incorrectly. The custom get_context here calls super().get_context(*args), which re-enters this format_value, so the broken value flows into actual rendering. Additionally, value[0] assumes the returned list is non-empty: if this widget were ever used with allow_multiple_selected and a None value, ChoiceWidget.format_value returns [] and value[0] raises IndexError. This is a clear logic/correctness bug.",
+        "locator": "saleor/account/widgets.py:12",
+        "severity": "low",
+        "evidence": "Lines 12-14:\n    def format_value(self, value):\n        value = super().format_value(value)\n        return value[0]\nsuper().format_value(value) is Django ChoiceWidget.format_value, which returns a list (e.g. ['CA'], [''], or [] for multiple+None). Returning value[0] breaks the list contract the parent's get_context/optgroups consumes (called via super().get_context on line 8), and indexes [0] with no empty-list guard."
+      },
+      {
+        "claim": "Per-row duplicate-email validation reads the wrong dict key and never fires (dead validation), allowing duplicate emails within a single bulk request to bypass the in-request check.",
+        "locator": "saleor/graphql/account/bulk_mutations/customer_bulk_update.py:303",
+        "severity": "high",
+        "evidence": "The email field lives inside the nested `input` dict (confirmed at lines 235-239: `customer_input[\"input\"][\"email\"]`). But the per-row guard reads/writes the TOP-LEVEL key: `if email := customer_input.get(\"email\"):` then `customer_input[\"email\"] = email.lower()` and `if customer_input[\"email\"] in duplicated_emails:`. `customer_input.get(\"email\")` is always None (email is under `customer_input[\"input\"]`), so the entire `DUPLICATED_INPUT_ITEM` email check is dead code. Two rows in the same request carrying the same email both pass this check; `full_clean(exclude=[\"password\"])` (line 415) only validates uniqueness against existing DB rows, not against sibling instances in the same batch, so both reach `bulk_update` (line 542) and can produce a duplicate-email IntegrityError or data corruption against the `email = models.EmailField(unique=True)` constraint."
+      },
+      {
+        "claim": "Email is not normalized to lowercase before being saved in the bulk-update path, while duplicate detection compares lowercased values — an inconsistency that lets case-variant duplicate emails slip through and persists non-normalized emails.",
+        "locator": "saleor/graphql/account/bulk_mutations/customer_bulk_update.py:256",
+        "severity": "medium",
+        "evidence": "`clean_customers` calls `DeprecatedModelMutation.clean_input(...)` (lines 256-258), whose implementation (saleor/graphql/core/mutations.py:704-746) does NOT lowercase email — unlike `BaseCustomerCreate.clean_input` (base.py:332-334 `cleaned_input[\"email\"] = email.lower()`) which is bypassed here. The cross-row duplicate set IS lowercased (line 236 `customer_input[\"input\"][\"email\"].lower()`), but the value actually written to the instance via `construct_instance(..., data)` (line 414) is the raw, un-lowercased `customer_input[\"input\"][\"email\"]`. The only lowercasing attempt (line 304) writes the unused top-level `customer_input[\"email\"]`. Net effect: mixed-case emails are stored verbatim, and `Foo@x.com` vs `foo@x.com` are treated as distinct by the (already broken) in-request check, defeating normalization expected elsewhere in the codebase."
+      },
+      {
+        "claim": "Copy-paste bug: in the billing-address branch, the newly created shipping_address (often None) is appended to the customer's new-addresses map instead of the billing_address, so a newly added default billing address is never linked to the customer's M2M addresses.",
+        "locator": "saleor/graphql/account/bulk_mutations/customer_bulk_update.py:519",
+        "severity": "medium",
+        "evidence": "Inside `if billing_address := customer_data[BILLING_ADDRESS_FIELD]:` / `else:` (new billing address) at lines 512-520, the code does `customer_instance_new_addresses_map[customer].append(shipping_address)` — appending `shipping_address` (the shipping variable, frequently None when only a billing address was supplied) rather than `billing_address`. The shipping branch (line 508) correctly appends `shipping_address`. Consequently the new billing Address is created (line 522 bulk_create) and set as `default_billing_address`, but at lines 559-561 only entries in `customer_instance_new_addresses_map` are added to `customer.addresses` (the M2M), so the new billing address is omitted from the user's address set (and a stray None can be appended), corrupting the address relationship."
+      },
+      {
+        "claim": "The 'customers' queryset used to resolve update targets includes staff accounts that have placed orders, so a MANAGE_USERS holder can mutate certain staff users (email, is_active, note, metadata) through a customer-only mutation lacking MANAGE_STAFF authorization.",
+        "locator": "saleor/graphql/account/bulk_mutations/customer_bulk_update.py:354",
+        "severity": "low",
+        "evidence": "`get_customers` calls `models.User.objects.customers().filter(lookup)` (line 354). `UserManager.customers()` (saleor/account/models.py:128-133) returns `filter(Q(is_staff=False) | (Q(is_staff=True) & Exists(orders for that user)))`. The mutation only requires `AccountPermissions.MANAGE_USERS` (line 101), not MANAGE_STAFF. Thus a user with MANAGE_USERS can target a staff member who happens to have an order and flip `is_active`/`is_confirmed`, change their email, or write `private_metadata` on that staff account — modifying privileged staff records through a customer-scoped mutation. This is inherited from the shared `customers()` definition, but it widens the blast radius of MANAGE_USERS beyond pure customers."
+      },
+      {
+        "claim": "Broken access control / privilege escalation: UserBulkSetActive lets a staff member with only MANAGE_USERS activate or deactivate higher-privileged staff accounts because clean_instance omits the out-of-scope (wider-permission) guard that every other user/staff management mutation in the codebase enforces.",
+        "locator": "saleor/graphql/account/bulk_mutations/user_bulk_set_active.py:34",
+        "severity": "high",
+        "evidence": "clean_instance (lines 34-53) only blocks (a) the actor's own account and (b) is_superuser accounts. It never calls get_out_of_scope_users(requestor, instances). The canonical guard get_out_of_scope_users (graphql/account/utils.py:67-74) returns any target whose permissions are broader than the actor's via `not root_user.has_perms(user_permissions)`. Comparable mutations enforce it: staff_bulk_delete.py:58 (check_if_requestor_can_manage_users) and mutations/staff/staff_update.py:75 (`if not user.is_superuser and get_out_of_scope_users(user, [instance])`), implemented in mutations/base.py:485-499. The mutation is permission-gated only by AccountPermissions.MANAGE_USERS (line 30) and is wired into the schema (account/schema.py:338). Result: a low-privileged operator can deactivate admin/staff accounts whose permissions they do not themselves hold (account lockout / DoS / takeover primitive); the superuser-only exemption does not cover non-superuser high-privilege staff."
+      },
+      {
+        "claim": "Unhandled KeyError on channels_in_bulk[channel_id] when a channel referenced by the Group-Channel through table is not present in the in_bulk result (e.g. the channel is deleted, or a replica lags, between the two separate non-transactional queries). This raises an uncaught KeyError, turning a normal GraphQL query (accessibleChannels) into a 500 error / DoS vector. The through-table query (group_channels) and the Channel.in_bulk query are issued separately with no transaction or consistency guarantee, so the assumption that every channel_id resolves is not safe.",
+        "locator": "saleor/graphql/account/dataloaders.py:127",
+        "severity": "low",
+        "evidence": "Line 120-127: channels_in_bulk = Channel.objects...in_bulk(list(group_channels.values_list('channel_id', flat=True))) then for group_id, channel_id in group_channels.values_list('group_id','channel_id'): group_to_channels[group_id].append(channels_in_bulk[channel_id]) -- direct subscript, no .get()/guard. A channel_id absent from channels_in_bulk raises KeyError. This loader feeds access-control filtering of orders by channel (types.py:685-687, 718-722), so a failure here can break authorized queries."
+      },
+      {
+        "claim": "Unhandled KeyError on group_id_to_restricted_access[group_id]. user_groups (line 168) and groups (line 171) are two independent, non-transactional queries; group_id_to_restricted_access is built only from `groups`. If a Group row is deleted between the two queries (or under replica lag), a group_id present in user_groups will be missing from the dict and the hard subscript raises an uncaught KeyError, producing a 500 on the restrictedAccessToChannels resolver. Should use .get(group_id, True) to stay consistent with the fail-closed default.",
+        "locator": "saleor/graphql/account/dataloaders.py:181",
+        "severity": "low",
+        "evidence": "Lines 175-183: group_id_to_restricted_access = dict(groups.values_list('id','restricted_access_to_channels')); ... user_to_restricted_access[user_id] &= group_id_to_restricted_access[group_id]. Direct subscript instead of .get(). The user_to_restricted_access defaultdict(lambda: True) default is fail-closed (correct), but the inner lookup is not guarded against the race between the two queries."
+      }
+    ],
+    "reference": [
+      {
+        "claim": "Broken access control / privilege escalation in UserBulkSetActive: a staff member holding only MANAGE_USERS can activate or deactivate higher-privileged (non-superuser) staff accounts because clean_instance omits the out-of-scope guard that sibling staff mutations enforce. clean_instance only blocks the actor's own account and is_superuser accounts; it never calls get_out_of_scope_users(requestor, instances). This is an account-lockout / DoS / takeover primitive.",
+        "locator": "saleor/graphql/account/bulk_mutations/user_bulk_set_active.py:34",
+        "severity": "critical",
+        "evidence": "Verified: clean_instance (lines 34-53) raises only on info.context.user == instance and instance.is_superuser; no get_out_of_scope_users call. The mutation is gated solely by AccountPermissions.MANAGE_USERS (Meta line 30). Canonical guard get_out_of_scope_users (graphql/account/utils.py:67-74) returns targets whose permissions exceed the actor's via `not root_user.has_perms(user_permissions)`. Siblings enforce it: staff_update.py:75 `if not user.is_superuser and get_out_of_scope_users(user, [instance])` and staff_bulk_delete.py:58 (check_if_requestor_can_manage_users). The superuser-only exemption does not cover non-superuser high-privilege staff."
+      },
+      {
+        "claim": "Production superuser creation routes through an explicitly insecure, test-only fixture (dangerously_get_or_create_superuser) imported from the tests namespace, and the non-interactive (--noinput) path applies NO password strength validation before persisting the superuser password. The fixture is documented 'should never be called for production use (due to lack of validation)' and silences the Semgrep unvalidated-password rule. This defeats the namespace-isolation + 'dangerously_' naming safeguards and lets a trivially weak superuser password be saved silently.",
+        "locator": "saleor/account/management/commands/createsuperuser.py:224",
+        "severity": "high",
+        "evidence": "Verified: createsuperuser.py:18 `from ...tests.fixtures.user import dangerously_get_or_create_superuser`; line 224 `_superuser, created = dangerously_get_or_create_superuser(**user_data)`. The non-interactive branch sets `user_data[PASSWORD_FIELD] = os.environ['DJANGO_SUPERUSER_PASSWORD']` (line 196) with no validate_password() (contrast interactive branch validate_password at line 180). The fixture (saleor/account/tests/fixtures/user.py:9-26, 29-56) carries the 'should never be called for production use' docstring and calls set_password with `# nosemgrep: python.django.security.audit.unvalidated-password.unvalidated-password` (user.py:52). Django's stock create_superuser path was replaced. NOTE: merges raw findings #1 (test fixture in prod path) and #2 (no noinput validation) — same root cause."
+      },
+      {
+        "claim": "Per-IP login throttling is trivially bypassed via a spoofed X-Forwarded-For header. The throttle identity is get_client_ip(request), which trusts the client-supplied XFF header and returns the first syntactically-valid IP with no trusted-proxy / NUM_PROXIES verification. An attacker rotating fabricated IPs lands in a fresh cache bucket (and a fresh IP block key) on every request, so the anti-credential-stuffing and anti-brute-force counters and blocks never accumulate, defeating the module's purpose.",
+        "locator": "saleor/account/throttling.py:22",
+        "severity": "high",
+        "evidence": "Verified: throttling.py:22 `ip = get_client_ip(request)`; core/utils/__init__.py:57-71 reads `request.META.get('HTTP_X_FORWARDED_FOR','')`, splits on ',', returns the first is_valid_ipv4/ipv6 token, no trusted-proxy check. All cache keys (ip_key, block_key, ip_user_key) embed this attacker-controlled ip (get_cache_key_* at lines 78-92), and the pre-attempt block add_block(block_key, MIN_DELAY) is also IP-keyed, so rotating XFF yields unlimited fresh throttle/block buckets."
+      },
+      {
+        "claim": "In customer_bulk_update, the per-row duplicate-email guard reads the wrong dict key and is dead code, and emails are never normalized to lowercase before save — so duplicate and case-variant emails within a single bulk request bypass the in-request check and can hit the unique(email) DB constraint (IntegrityError / data corruption) or be stored non-normalized. The email lives under the nested `input` dict, but the guard reads/writes the top-level key.",
+        "locator": "saleor/graphql/account/bulk_mutations/customer_bulk_update.py:303",
+        "severity": "high",
+        "evidence": "Verified: email is at customer_input['input']['email'] (lines 235-239). The guard at lines 303-306 does `if email := customer_input.get('email'):` then `customer_input['email'] = email.lower()` and checks `if customer_input['email'] in duplicated_emails:` — customer_input.get('email') is always None, so the DUPLICATED_INPUT_ITEM email check never fires. clean_input (graphql/core/mutations.py) does NOT lowercase email (no email handling present), unlike BaseCustomerCreate.clean_input; construct_instance writes the raw un-lowercased input value, and full_clean only checks uniqueness against existing DB rows, not sibling batch instances. NOTE: merges raw findings #13 (dead dedup) and #14 (non-normalization) — same nested-key data-flow defect."
+      },
+      {
+        "claim": "Copy-paste bug in customer_bulk_update billing-address branch: the newly created billing_address is set as default_billing_address but the code appends shipping_address (frequently None) to the customer's new-addresses map instead of billing_address, so a newly added default billing address is never linked to the customer's M2M addresses (and a stray None can be appended), corrupting the address relationship.",
+        "locator": "saleor/graphql/account/bulk_mutations/customer_bulk_update.py:519",
+        "severity": "medium",
+        "evidence": "Verified: inside `if billing_address := customer_data[BILLING_ADDRESS_FIELD]:` else-branch (lines 512-520), `customer_instance_new_addresses_map[customer].append(shipping_address)` appends the shipping variable, not billing_address. The shipping branch (line 508) correctly appends shipping_address. The new billing Address is bulk_created and set default (line 514), but only entries in customer_instance_new_addresses_map are added to customer.addresses at lines 559-561, so the billing address is omitted."
+      },
+      {
+        "claim": "send_set_password_notification generates the set-password token twice via two independent token_generator.make_token(user) calls, so the token in password_set_url and the standalone 'token' payload field are not guaranteed equal. Django's PasswordResetTokenGenerator embeds a per-second timestamp, so calls straddling a 1-second boundary yield different tokens; the recipient/template may then use a token that fails check_token validation. Every sibling notification computes the token once and reuses it, confirming this is unintended.",
+        "locator": "saleor/account/notifications.py:187",
+        "severity": "medium",
+        "evidence": "Verified: notifications.py:182 `token = token_generator.make_token(user)` builds params/password_set_url (lines 183-184). Line 187 independently regenerates `'token': token_generator.make_token(user),` instead of reusing `token`. Contrast send_account_delete_confirmation_notification (lines 152-161) which computes user_token once and reuses it for both URL and payload."
+      },
+      {
+        "claim": "Login enumeration via timing side-channel: when an email does not resolve, an empty models.User() is constructed and user.check_password(password) is called. Django's check_password on a User with no usable password hash short-circuits and returns False without running the configured slow hasher, whereas an existing user runs full PBKDF2/Argon2 verification. The measurable timing difference enables account enumeration; the empty User() makes the path look uniform but does not equalize timing.",
+        "locator": "saleor/account/throttling.py:51",
+        "severity": "medium",
+        "evidence": "Verified: throttling.py lines 48-53: `if not user: user_exists = False; user = models.User()` then `correct_password = user.check_password(password)`. A fresh User() has an unusable password so check_password returns fast; existing users run the full hasher, producing a timing oracle for account existence."
+      },
+      {
+        "claim": "Operator-precedence bug in validate_possible_number causes an unhandled AttributeError (500 / availability defect) on unparseable phone input instead of a clean ValidationError. The intended null-guard does not cover the .is_valid() dereference.",
+        "locator": "saleor/account/validators.py:13",
+        "severity": "medium",
+        "evidence": "Verified: lines 9-13 `if (phone_number and not is_possible_number(phone_number) or not phone_number.is_valid()):`. Since `and` binds tighter than `or`, this is `(phone_number and not is_possible_number(...)) or (not phone_number.is_valid())`. When to_python(phone, country) returns None (unparseable), the first AND clause is falsy, forcing evaluation of `not phone_number.is_valid()` on None -> AttributeError. Attacker-controlled unparseable phone input yields an unhandled exception."
+      },
+      {
+        "claim": "Email-normalization mismatch in the createsuperuser path creates a uniqueness gap: the command's pre-check (_validate_username) and the fixture's existence check use the RAW email, but the row is inserted with a domain-lowercased email (UserManager.normalize_email). An email differing only by domain case passes the 'already taken' check yet can collide on the unique email constraint at save time, raising an unhandled IntegrityError instead of the friendly 'already exists' handling.",
+        "locator": "saleor/account/management/commands/createsuperuser.py:207",
+        "severity": "low",
+        "evidence": "Verified: createsuperuser.py:207 validates uniqueness via _validate_username on the raw username; the fixture filters on raw email (tests/fixtures/user.py:17) then normalizes before insert: `email = UserManager.normalize_email(email)` (user.py:37) prior to user.save() (user.py:55). Lookups precede normalization, so the duplicate check and the unique(email) column can disagree on domain casing."
+      },
+      {
+        "claim": "createsuperuser get-or-create semantics differ from Django's create_superuser: when a user with the same email exists, dangerously_get_or_create_superuser returns (existing_user, False) and silently does NOT update password, is_staff, is_superuser, or group membership. The command prints 'user already exists' and exits 1, so an operator's attempt to (re)provision a superuser fails silently with no privilege change, masking incomplete setup.",
+        "locator": "saleor/account/management/commands/createsuperuser.py:224",
+        "severity": "low",
+        "evidence": "Verified: tests/fixtures/user.py:17-18 `if user := User.objects.filter(email=email).first(): return user, False` returns the existing user untouched. createsuperuser.py:227-231 writes 'The operation was aborted: user already exists in database.' and sys.exit(1). No password/permission reconciliation occurs. Django's create_superuser would instead raise IntegrityError on duplicates."
+      },
+      {
+        "claim": "Latent NoneType dereference in trigger_send_password_reset_notification: the user is fetched with .filter(pk=user_pk).first() (returns None on no match) then cast(User, user), but typing.cast is a no-op at runtime. If the user is deleted between Celery enqueue and worker execution (a real async TOCTOU window), user is None and the next deref user.is_staff raises AttributeError, crashing the task. The early-return guard only covers a falsy user_pk. Sibling finish_creating_user uses .get() and would raise a clean DoesNotExist.",
+        "locator": "saleor/account/tasks.py:35",
+        "severity": "low",
+        "evidence": "Verified: tasks.py:35 `user = User.objects.filter(pk=user_pk).first()`; line 36 `user = cast(User, user)` (runtime no-op); line 38 `if not channel_slug and not user.is_staff:` derefs user. Guard lines 32-33 only check `if not user_pk`. Contrast finish_creating_user line 87 `user = User.objects.get(pk=user_pk)`. Reachable when callers enqueue with a stale pk asynchronously."
+      },
+      {
+        "claim": "Per-user brute-force protection (case B) is silently disabled for non-existent accounts and for the first failed attempt of a known user: the per-user attempt counter is incremented only inside the `if user_exists:` block. Combined with the enumeration oracle, brute-force attempts against unknown/guessed usernames are governed only by the coarse per-IP counter, contradicting the documented per-user brute-force defense.",
+        "locator": "saleor/account/throttling.py:55",
+        "severity": "low",
+        "evidence": "Verified: throttling.py lines 55-64: the ip_user_key counter `increment_attempt(ip_user_key)` is inside `if user_exists:`. The per-IP counter (case A) increments outside it. So brute-force attempts against valid-but-unconfirmed or non-existent usernames bypass the stricter per-user delay schedule."
+      },
+      {
+        "claim": "Non-atomic counter update in increment_attempt creates a race and a potential ValueError. cache.add followed by cache.incr is a non-atomic read-modify-write: concurrent callers can lose increments (undercounting attempts, weakening throttling), and if the key expires between add and incr, cache.incr raises ValueError on backends like locmem/memcached, crashing the login request.",
+        "locator": "saleor/account/throttling.py:143",
+        "severity": "low",
+        "evidence": "Verified: throttling.py:142-145 `if not cache.add(key, 1, timeout=ATTEMPT_COUNTER_EXPIRE_TIME): return cache.incr(key, 1)`. add+incr is not atomic; key expiry between the two calls makes cache.incr raise ValueError on most Django backends, and concurrent requests can lose increments. The concurrency comment protects only the block key, not this counter."
+      },
+      {
+        "claim": "DatalistTextWidget.format_value violates Django's ChoiceWidget/Select contract by returning a single string value[0] instead of the list the parent always returns, and indexes [0] with no empty-list guard. Downstream get_context/optgroups iterate over the result to compute 'selected' choices; returning a bare string makes that code iterate over characters, breaking selected-matching for multi-character values, and value[0] raises IndexError if the parent ever returns [] (allow_multiple_selected + None).",
+        "locator": "saleor/account/widgets.py:12",
+        "severity": "low",
+        "evidence": "Verified: widgets.py:12-14 `def format_value(self, value): value = super().format_value(value); return value[0]`. ChoiceWidget.format_value returns a list; the custom get_context (line 7) calls super().get_context which re-enters format_value, so the broken value flows into rendering. No empty-list guard on [0]."
+      },
+      {
+        "claim": "In customer_bulk_update, get_customers uses User.objects.customers() which includes staff accounts that have placed orders, so a MANAGE_USERS holder can mutate certain staff users (email, is_active, is_confirmed, note, metadata) through a customer-only mutation lacking MANAGE_STAFF authorization, widening the blast radius of MANAGE_USERS beyond pure customers.",
+        "locator": "saleor/graphql/account/bulk_mutations/customer_bulk_update.py:354",
+        "severity": "low",
+        "evidence": "Verified: get_customers calls `models.User.objects.customers().filter(lookup)` (line 354). UserManager.customers() (saleor/account/models.py:129-133) returns filter(Q(is_staff=False) | (Q(is_staff=True) & Exists(orders for that user))). The mutation requires only AccountPermissions.MANAGE_USERS, not MANAGE_STAFF, so a staff member who happens to have an order can be targeted."
+      },
+      {
+        "claim": "Unhandled KeyError in the AccessibleChannelsByGroupIdLoader: channels_in_bulk[channel_id] is a direct subscript with no .get() guard. group_channels (through-table) and the Channel.in_bulk query are separate non-transactional queries, so if a channel is deleted or a replica lags between them, a channel_id missing from channels_in_bulk raises an uncaught KeyError, turning the accessibleChannels resolver into a 500. This loader feeds channel-based access-control filtering of orders.",
+        "locator": "saleor/graphql/account/dataloaders.py:127",
+        "severity": "low",
+        "evidence": "Verified: dataloaders.py:120-127 builds channels_in_bulk via Channel...in_bulk(...) then `group_to_channels[group_id].append(channels_in_bulk[channel_id])` — direct subscript, no guard. A channel_id absent from the in_bulk result raises KeyError."
+      },
+      {
+        "claim": "Unhandled KeyError in RestrictedChannelAccessByUserIdLoader: group_id_to_restricted_access[group_id] is a direct subscript. user_groups and groups are two independent non-transactional queries and the dict is built only from groups; if a Group is deleted (or replica lag) a group_id present in user_groups is missing from the dict, raising an uncaught KeyError and a 500 on restrictedAccessToChannels. Should use .get(group_id, True) to stay consistent with the fail-closed default.",
+        "locator": "saleor/graphql/account/dataloaders.py:181",
+        "severity": "low",
+        "evidence": "Verified: dataloaders.py:175-183 builds group_id_to_restricted_access = dict(groups.values_list('id','restricted_access_to_channels')) then `user_to_restricted_access[user_id] &= group_id_to_restricted_access[group_id]` — direct subscript. The user_to_restricted_access defaultdict(lambda: True) is fail-closed but the inner lookup is not guarded against the cross-query race."
+      }
+    ]
+  }
+}

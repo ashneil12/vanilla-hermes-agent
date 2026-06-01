@@ -47,7 +47,12 @@ class RepoAuditResult:
         return out
 
 
-_DEFAULT_EXCLUDE = ("/test", "/tests/", "/migrations/", "/.git/", "/node_modules/", "__pycache__")
+_DEFAULT_EXCLUDE = (
+    "/test", "/tests/", "/migrations/", "/.git/", "/node_modules/", "__pycache__",
+    # non-source / tooling dirs the agent kept wrongly auditing (semgrep RULES, CI, vendored)
+    "/.semgrep/", "/.github/", "/.circleci/", "/vendor/", "/venv/", "/.venv/",
+    "/site-packages/", "/fixtures/", "/conftest", "/setup.py", "/docs/",
+)
 
 
 def chunk_repo(
@@ -96,12 +101,20 @@ def chunk_repo(
 
 def _finder_prompt(task: str, chunk: Chunk) -> str:
     return (
-        f"You are auditing ONE file from a large codebase. {task}\n\n"
+        f"You are a senior security auditor examining ONE file from a large codebase. {task}\n\n"
         f"FILE: {chunk.path} (lines {chunk.start}+; line numbers are prefixed)\n\n"
         f"{chunk.text}\n\n"
-        "Report ONLY concrete, real, locatable issues in THIS file — no speculation, no style nits. "
+        "Audit METHOD — do this, don't just pattern-match for keywords:\n"
+        "- TRACE untrusted input (request data, params, headers, env, file contents) to dangerous sinks "
+        "(SQL, shell, template render, deserialization, file paths, redirects, auth decisions).\n"
+        "- Check CROSS-FUNCTION / CROSS-BRANCH CONSISTENCY: a value computed twice that must match but may not; "
+        "validation present in one branch but MISSING in another; a check on raw input while the write normalizes it.\n"
+        "- Look for TOCTOU / async races, guard or type-cast NO-OPS (e.g. typing.cast does NOT validate at runtime), "
+        "missing None/existence checks, and access-control checks that are absent or bypassable (IDOR).\n"
+        "Report ONLY concrete, real, locatable issues in THIS file — no speculation, no style nits. State the "
+        "MECHANISM (the data-flow or the inconsistency) in evidence.\n"
         'Reply with ONLY JSON: {"findings":[{"claim":"<specific>","line":<int>,'
-        '"evidence":"<why>","severity":"info|low|medium|high|critical"}]}. Empty if none.'
+        '"evidence":"<the mechanism / data-flow>","severity":"info|low|medium|high|critical"}]}. Empty if none.'
     )
 
 
@@ -232,9 +245,15 @@ def decide_audit_strategy(task: str, overview: dict, *, aux_call_fn=None, agent=
         f"REPO: {overview['root']} — {overview['total_files']} source files, {overview['total_loc']} LOC.\n"
         f"TOP AREAS by size:\n{areas}\n\n"
         f"This is too large to read in one pass. Decide your audit strategy. You may audit at most "
-        f"{max_files_cap} files this pass (pick the highest-value security/correctness surface).\n"
-        'Reply with ONLY JSON: {"reasoning":"<why this decomposition>", '
-        '"include_substr":["<path fragments to include, e.g. /account/>"], '
+        f"{max_files_cap} files this pass.\n\n"
+        "RULES:\n"
+        "- Do NOT include everything ('all'/empty include is WRONG). NAME the specific path fragments with "
+        "the HIGHEST security/correctness risk and audit those first: authentication/accounts, payments, "
+        "permissions/access-control, input handling & GraphQL/REST mutations, crypto/secrets, file/network IO, "
+        "deserialization. Skip linter-rule/config/docs/example dirs.\n"
+        "- Rank by risk; the include_substr you return is what gets audited, so choose deliberately.\n"
+        'Reply with ONLY JSON: {"reasoning":"<which areas are highest-risk and why>", '
+        '"include_substr":["<specific high-risk path fragments, e.g. /account/, /payment/, /permission/>"], '
         '"exclude_substr":["<extra excludes>"], "max_files":<int<=cap>, '
         '"one_finder_per_file":true, "verify_severities":["critical","high"]}'
     )
