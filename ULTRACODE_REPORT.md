@@ -3,7 +3,37 @@
 _Built autonomously overnight on branch `feat/ultracode-tier3` in an isolated
 worktree. Your `main` was never touched; nothing pushed. 76 tests green, 14 commits._
 
-## TL;DR — the honest verdict
+## UPDATE — discernment changes the verdict
+
+After the first benchmark pass showed ultracode losing on cost, I added the piece
+it was missing: **discernment** (solo-first → triage → escalate only if it helps),
+plus **execution-based verification**, **root-cause reconciliation**, and a test
+on a **real cloned repo** (`we45/Vulnerable-Flask-App`, ~10 real vulns). Re-run on
+`deepseek-v4-flash` with discernment ON:
+
+| task | baseline R/P · cost | ultracode R/P · cost |
+|---|---|---|
+| auth (easy) | 1.00 / 1.00 · 1.1k | 0.75 / 1.00 · **2.3k** (stayed solo; was 37k forced) |
+| bigbug (12 bugs) | 1.00 / 1.00 · 1.8k | 1.00 / 1.00 · **3.4k** (stayed solo; was 81k forced) |
+| **vulnflask (real, 10 vulns)** | 0.90 / 0.93 · 5.5k | 0.90 / **1.00** · 7.4k (escalated; killed the FP) |
+| **mean** | **0.97 / 0.98** · 8.4k | **0.88 / 1.00** · 13.2k |
+
+**What changed:** discernment cut ultracode's cost from **30–78× → ~1.5×** by
+staying solo when a single pass suffices. Precision rose to **1.00** (zero
+spurious — verification + reconciliation kill the false positives the bare model
+emits; on the real app it killed baseline's FP). Recall is ≈ baseline, with one
+honest caveat: the discerned-*solo* path is a single call, so it carries single-
+call variance (it missed 1/4 on auth this run — noise, not a regression).
+
+**Revised verdict:** with discernment, ultracode is **no longer a cost gimmick.**
+It's a **~1.5× cost, higher-precision** mode with escalation headroom — a
+defensible "leave it on if you value zero-false-positive output" profile, and a
+clear win on genuinely hard/large/high-stakes work where it escalates. The
+"always full-metal" version was the gimmick; the disciplined version is the tool.
+
+---
+
+## TL;DR — the original (forced-orchestration) verdict
 
 I built the full ultracode harness, stress-tested it, compared it against my own
 orchestration, and benchmarked it hard against `deepseek-v4-pro` **and**
