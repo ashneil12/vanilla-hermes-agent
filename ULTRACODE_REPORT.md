@@ -194,3 +194,77 @@ for orchestration to recover.
 3. **Auto-scale rigor to input size / stakes** so small tasks stay cheap.
 4. **Fix Hermes `delegate_task` thread-safety** for true on-runtime 100-parallel.
 5. Re-benchmark on **real large repos** (the regime that should justify the cost).
+
+---
+
+## UPDATE — false-positive machine → accurate auditor (the accuracy stack)
+
+The hardest, most honest finding of the whole exercise: **a weak model finding +
+a weak model verifying = a false-positive machine.** On the 12 real findings the
+flash-driven harness produced against Hermes, flash skeptics rubber-stamped ~75%
+false positives — they share the finder's blind spots, so the votes are correlated
+and worthless. Precision, not recall, is the bottleneck for a weak model.
+
+Three gates fix it, and **no single gate is sufficient — the composition is**:
+
+| gate | mechanism | measured on the 12 hermes findings |
+|------|-----------|-----------------------------------|
+| **1. Adjudication** (reasoning) | full-file context + burden-of-proof: name the attacker, trace source→sink, prove no guard on the path, prove a trust boundary is crossed. False-positive until proven. | flash: caught **6/10** FPs · **pro: caught 10/10** FPs |
+| **2. Execution arbiter** (ground truth) | a cheap model writes a repro; the runtime runs it; `exit 0` = reproduced. Overrules the verifier's vote. | **resurrected 2/2** reals pro had killed |
+| **3. Strong verifier** (reliability) | run gate 1 on a model *stronger* than the finders to break correlated errors. | pro vs flash: +4 FPs caught |
+
+**Net: pro drops 10/10 false positives, execution recovers 2/2 reals → 12/12 correct.**
+
+Key sub-findings:
+- **A strong verifier over-kills.** Pro with burden-of-proof marked *both* genuine
+  defects (`anthropic_adapter.py:376` OAuth substring check, `server.py:167` `%00`
+  null-byte) as `false_positive` — it is *confident*, not hedging, so the
+  `conditional` ("real-but-gated") escape hatch never fires. **You cannot prompt
+  your way past a verifier that is simply wrong on a threat-model call.**
+- **Only execution overrules it.** Both defects are one-line ground-truth facts
+  (`"anthropic.com" in "api.anthropic.com.evil.com"` → True; `unquote("%00")` →
+  `\x00`). A repro is reality; reality outranks any vote. This is why gate 2 exists.
+- **The one genuinely actionable Hermes bug**: `agent/anthropic_adapter.py:376`
+  uses a substring host check, so `https://api.anthropic.com.evil.com` is
+  misclassified as first-party Anthropic. Fix: host-suffix/exact match, not `in`.
+
+**Recommended production config for auditing: discover cheap (flash, broad) →
+adjudicate strong (pro, full-file + burden-of-proof) → execution-arbiter anything
+testable.** Cheapest path to near-zero false positives without dropping real bugs.
+
+## UPDATE — general-use (research) and the cost of orchestrating recall
+
+Generalized the benchmark beyond code: 5 factual-recall tasks (SOLID, ACID, HTTP
+status, CAP, Python 3.10) and 2 recall-at-scale enumerations (23 GoF patterns, the
+12-factor app). Scored ground-truth fact recall, baseline single-shot vs harness.
+
+**Result: baseline 1.000, ultracode 1.000 on every task — zero recall gain — at up
+to 105× the token cost.** Flash already *knows* these facts; a single pass saturates
+recall, so there is nothing to recover. This holds for the "hard" 23-item lists too:
+"many facts" is not the same as "facts the model lacks."
+
+The real lesson for general-use: **orchestration never improves recall-of-known-
+facts. Its value is gather / compute / verify work a single pass cannot finish**
+(multi-file audit, multi-source synthesis, derivation, precision sign-off). Pointing
+it at a closed-form recall question is the same "always full-metal" anti-pattern as
+over-auditing a trivial diff.
+
+**Fix shipped:** the discernment gate had no *solo terminal state* — when triage said
+"solo suffices" it still escalated to a light ensemble (measured: 17–36× cost, 0
+recall gain on 3/5 tasks). Added: a **bounded + confident + low-stakes + no-named-gaps
+task now terminates at `discerned-solo`** (`harness.py`), honoring the triage signal
+that was computed-but-ignored. Guard is deliberately narrow — find-all *audits* still
+light-ensemble, preserving the recall protection that motivated "always ensemble."
+Locked with a unit test (`test_harness_discernment_stays_solo_when_bounded_and_confident`).
+
+## Status of the "honest next steps" above
+
+1. **Execution / ground-truth — DONE.** `execute.py` (isolated `-I` subprocess) +
+   `groundtruth.py` (arbiter) + `adjudicate.py` (reasoning gate). Verification now
+   touches reality; it is what recovered the 2 reals a strong verifier over-killed.
+2. Root-cause dedup — reconciliation in place; semantic dedup still a refinement.
+3. **Auto-scale rigor to size/stakes — DONE** (discernment: solo / light / full,
+   now with a real solo terminal state).
+4. **`delegate_task` thread-safety — DONE** (module RLock; validated by the fork's
+   own 135 tests + a 100-agent parallel stress test).
+5. Real large repos — exercised (we45 Flask app + chunked repo-scale auditing).
