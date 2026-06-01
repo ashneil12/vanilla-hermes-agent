@@ -143,7 +143,12 @@ def run(
     enable_ledger: bool = True,
     ledger_path: Optional[str] = None,
     kind: str = "auto",
+    verify_delegate_fn: Optional[Callable[..., str]] = None,
 ) -> UltracodeResult:
+    # discover cheap, VERIFY STRONG: the hermes verification proved weak skeptics
+    # "confirm" false positives. A stronger backend (or execution arbiter) for the
+    # skeptics is the precision fix. Defaults to the finder backend if not split.
+    verify_delegate_fn = verify_delegate_fn or delegate_fn
     cfg = config or UltracodeConfig()
     led = RunLedger(run_id, path=ledger_path) if enable_ledger else None
     rt = runtime_from_agent(agent)
@@ -261,7 +266,7 @@ def run(
     # --- adversarially verify: independent skeptics, default-to-refuted -------
     if decision.verify and findings:
         verify_findings(findings, context=context, parent_agent=agent, config=cfg, lenses=decision.lenses,
-                        delegate_fn=delegate_fn, concurrency=cfg.concurrency, kind=tkind)
+                        delegate_fn=verify_delegate_fn, concurrency=cfg.concurrency, kind=tkind)
         stages.append(f"verify({len(decision.lenses)} lenses, quorum {cfg.effective_quorum(len(decision.lenses))})")
         survs = _survivors(findings)
     else:
