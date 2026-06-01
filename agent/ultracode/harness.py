@@ -46,6 +46,12 @@ class UltracodeResult:
     caps_announced: List[str] = field(default_factory=list)
     stages: List[str] = field(default_factory=list)
 
+    def __post_init__(self):
+        # one guard where ALL answer-producing paths converge (solo, judge fallback,
+        # synthesis): a blank answer is a real degradation, never silently confident.
+        if not (self.answer or "").strip():
+            self.caps_announced.append("WARNING: empty answer produced (all upstream paths degraded)")
+
     def summary(self) -> dict:
         return {
             "task": self.task[:120],
@@ -350,9 +356,14 @@ def run(
     crit = completeness_critic(task, findings, caps_announced=caps, agent=agent, aux_call_fn=aux_call_fn, model=model)
     if crit.gaps:
         caps.append(f"completeness critic flagged {len(crit.gaps)} gap(s): {'; '.join(crit.gaps[:3])}")
+    elif not crit.independent:
+        # empty gaps from a SAME-MODEL critic is UNKNOWN, not verified-complete — say so
+        # (don't let absence-of-gaps read as a clean bill of health). Does not gate the loop.
+        caps.append("completeness UNKNOWN: same-model critic found no gaps, but shares the finders' blind spots")
     stages.append("critic")
     if led:
-        led.event("critic", {"gaps": crit.gaps, "coverage_note": crit.coverage_note, "independent": crit.independent})
+        led.event("critic", {"gaps": crit.gaps, "coverage_note": crit.coverage_note,
+                             "independent": crit.independent, "raw": (crit.raw or "")[:500]})
 
     # --- synthesize (solo, non-delegable) -- research: landscape-first to keep depth -
     landscape = tkind == TaskKind.RESEARCH and cfg.research_landscape_synth

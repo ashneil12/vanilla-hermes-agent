@@ -186,11 +186,13 @@ def plan_approach(
             model=model, temperature=0.3, max_tokens=2000,
             main_runtime=runtime_from_agent(agent), call_fn=aux_call_fn,
         )
-    except Exception:
-        return Approach()
+    except Exception as exc:
+        # mirror plan()'s pattern: keep the reason so a degraded fallback is debuggable
+        # in the ledger, not indistinguishable from "model produced no usable plan".
+        return Approach(reasoning=f"approach unavailable: {exc}")
     parsed = extract_json(text)
     if not isinstance(parsed, dict) or not parsed.get("worker_directive"):
-        return Approach()
+        return Approach(reasoning="approach reply unparseable or missing worker_directive")
     subs = []
     for it in (parsed.get("subtasks") or [])[:max_subtasks]:
         if isinstance(it, dict) and str(it.get("goal", "")).strip():

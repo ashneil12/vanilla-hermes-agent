@@ -87,6 +87,18 @@ def test_reconcile_does_not_merge_same_bugtype_different_location():
     assert len(reconcile_findings(fs)) == 2
 
 
+def test_reconcile_keeps_contradictory_claims_distinct():
+    # the polarity guard: "not"/"no" are stopwords, so opposite claims have identical
+    # signatures and would merge — collapsing a real disagreement into one position.
+    from agent.ultracode.schema import reconcile_findings
+    fs = [
+        Finding(claim="The two-phase commit protocol is safe under network partition", locator="2pc analysis"),
+        Finding(claim="The two-phase commit protocol is not safe under network partition", locator="2pc analysis"),
+    ]
+    # contradiction must survive as TWO findings (landscape synth presents both as CONTESTED)
+    assert len(reconcile_findings(fs)) == 2
+
+
 def test_vote_refuted_follows_verdict():
     v = VerifierVote(VerifyLens.SECURITY, Verdict.REFUTED).validate()
     assert v.refuted is True

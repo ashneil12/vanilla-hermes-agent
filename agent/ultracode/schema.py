@@ -127,11 +127,15 @@ class Finding:
 
     def dedup_key(self) -> str:
         """Stable identity for dedup. Uses locator when present (most precise),
-        else a hash of the normalized claim."""
+        else a hash of the normalized claim. Includes a POLARITY bit so a claim and
+        its negation ("X is safe" / "X is not safe") never collapse — the 24-char slug
+        truncates before a trailing 'not', and 'not'/'no' are stopwords, so without this
+        a contradiction would be silently deduped away."""
+        pol = "neg" if _polarity(self.claim) else "pos"
         if self.locator.strip():
-            return f"loc::{self.locator.strip().lower()}::{_slug(self.claim, 24)}"
+            return f"loc::{self.locator.strip().lower()}::{pol}::{_slug(self.claim, 24)}"
         digest = hashlib.sha1(_slug(self.claim, 200).encode()).hexdigest()[:16]
-        return f"claim::{digest}"
+        return f"claim::{pol}::{digest}"
 
     def as_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -223,6 +227,18 @@ def _loc_tokens(locator: str) -> set:
     return {w for w in re.findall(r"[a-z0-9_]+", (locator or "").lower()) if len(w) > 2}
 
 
+_NEG = re.compile(r"\b(not|no|never|cannot|can'?t|won'?t|doesn'?t|isn'?t|aren'?t|without|fails?|unable|lacks?|none|neither)\b|n't", re.I)
+
+
+def _polarity(claim: str) -> bool:
+    """Coarse claim polarity (odd # of negations => negated). Used to keep CONTRADICTORY
+    findings distinct: "X works" and "X does NOT work" share every content token once
+    'not'/'no' are stopworded, so claim-sig Jaccard would merge them — collapsing a real
+    disagreement into one position. A polarity mismatch blocks the merge so the landscape
+    synthesis can present both sides (CONTESTED) instead of silently dropping one."""
+    return len(_NEG.findall(claim or "")) % 2 == 1
+
+
 def reconcile_findings(findings: List[Finding], *, similarity: float = 0.6) -> List[Finding]:
     """Root-cause reconciliation: collapse near-duplicate findings (the same bug
     reported by multiple finders with different wording/locators). Conservative —
@@ -238,7 +254,8 @@ def reconcile_findings(findings: List[Finding], *, similarity: float = 0.6) -> L
             union = fsig | gsig
             jac = (len(fsig & gsig) / len(union)) if union else 0.0
             shares_symbol = bool(floc & gloc) or not (floc or gloc)
-            if jac >= similarity and shares_symbol:
+            opposite = _polarity(f.claim) != _polarity(g.claim)  # contradiction: keep both
+            if jac >= similarity and shares_symbol and not opposite:
                 if f.evidence and f.evidence not in g.evidence:
                     g.evidence = (g.evidence + " | " + f.evidence).strip(" |")
                 if _sev_rank(f.severity) > _sev_rank(g.severity):

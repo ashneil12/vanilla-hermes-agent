@@ -123,7 +123,13 @@ def delegate_fanout(
 
     def run_wave(base_wave):
         base, wave = base_wave
-        parsed = _parse_delegate_result(fn(tasks=wave, parent_agent=parent_agent, role=role))
+        try:
+            parsed = _parse_delegate_result(fn(tasks=wave, parent_agent=parent_agent, role=role))
+        except Exception as exc:
+            # one wave's backend error must not crash the other 99 at scale — degrade it
+            # to per-task error entries so the rest of the fan-out completes.
+            return [{"task_index": base + local, "status": "error", "summary": None,
+                     "error": f"delegate wave failed: {exc}"} for local in range(len(wave))]
         entries: List[Dict[str, Any]] = []
         for local in range(len(wave)):
             entry = parsed[local] if local < len(parsed) and isinstance(parsed[local], dict) else None

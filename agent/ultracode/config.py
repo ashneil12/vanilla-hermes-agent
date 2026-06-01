@@ -62,8 +62,10 @@ class UltracodeConfig:
 
     # -- deep research (research-kind only; defaults preserve code behavior) --
     research_landscape_synth: bool = True   # organize the answer BY FACET preserving every specific, instead of lead-with-one-result (which collapses the per-facet depth a fan-out paid for)
-    detect_contradictions: bool = True      # surface same-topic opposite-predicate findings as Position-A-vs-B instead of silently merging/dropping
-    research_factcheck_gate: bool = True     # spot-check a round's fresh claims before they seed the next replan (stop false claims founding later rounds)
+    # NOTE: contradiction preservation is handled inline in reconcile_findings (a polarity
+    # guard keeps opposite claims distinct) — no separate detect pass / flag needed. A
+    # research fact-check gate was considered and dropped as redundant with the post-loop
+    # verify pass (see ULTRACODE_REPORT.md hardening YAGNI list).
 
     # -- budget (token ceiling; None = no object, but still announced) --
     run_budget_tokens: Optional[int] = None
