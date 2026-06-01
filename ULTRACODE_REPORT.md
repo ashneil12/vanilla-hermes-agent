@@ -274,6 +274,52 @@ the recall protection that motivated "always ensemble." Locked with a unit test
 cost — the robust levers are structural** (task shape, material size, named-gap
 presence), and only a live weak model surfaces where the keyword heuristics misfire.
 
+## UPDATE — parallel DEEP-RESEARCH organization (the regime map)
+
+Built facet-decomposition + per-facet depth + landscape synthesis for research, then
+benchmarked coverage (fraction of a rubric of sub-points present in the synthesized
+answer) across three regimes. The result is a clean regime map — the same shape as the
+code finding: **orchestration wins at SCALE, not on small/known problems.**
+
+| regime | baseline (1 pass) | ultracode | verdict |
+|---|---|---|---|
+| trivial factual recall (SOLID, ACID…) | 0.95 | 0.95 | tie — orchestration is pure overhead; route to solo |
+| broad **known-topic** coverage (microservices, appsec; 13–18 rubric pts) | **1.00** | 0.94 | baseline SATURATES — one pass holds it all; orchestration can only match or lose |
+| **corpus exceeds one context** (200 docs ≈ 248k tok, 200 facts) | **0.41** | **1.00** | **orchestration WINS +0.59** — the genuine regime |
+
+The corpus result is the load-bearing one. With fabricated facts (so parametric
+knowledge can't shortcut — a fact is recoverable only by READING its chunk), a single
+pass over a 248k-token corpus physically sees only 81/200 facts (one ~100k-token
+window) and scores 0.41; chunking the full corpus across 40 focused extractors recovers
+**200/200 = 1.00**. The facts only orchestration found are exactly the tail documents
+beyond the baseline's window. Mechanism is identical to repo-scale audit: chunk → fan
+out → union. **Deep-research orchestration earns its cost precisely when the material
+exceeds what one focused pass can hold** — not when a capable model already knows the
+answer (it saturates a single pass there too, on coverage just as on recall).
+
+### Agent figures out its OWN method (not a recipe) — and does it BETTER
+
+The deep-research directives are NOT hardcoded. The general PRINCIPLES (depth-per-slice;
+verification-fits-the-task — accuracy not provenance for claims; synthesis-preserves-
+and-hedges-rather-than-deletes) live in the `plan_approach` meta-prompt; the agent reads
+them and writes its OWN `worker_directive` / `skeptic_directive` / `synthesis_directive`
+and cuts its own facets. Probed live: the weak model (flash), given only the principles,
+decomposed microservices into the 6 natural facets itself, wrote a depth mandate in its
+own words, and an accuracy-checking skeptic and a preserve-every-specific synthesis.
+Hardcoded versions are now FALLBACK-only. And it's not just philosophically cleaner — it
+measured **better**: agent-driven coverage 0.937 vs the hardcoded-recipe's 0.867 (+0.07,
+perfect 1.00 on microservices). Scripting the method underperformed teaching the skill.
+
+### What it took (the weak model exposed each leak)
+1. `_synthesize` led with "the single most load-bearing result" — anti-depth; it
+   collapsed the per-facet investigation. → landscape/agent-driven synthesis.
+2. Verification (built for code audit) was **killing true basics** — `sql_injection`,
+   `mfa`, `circuit_breaker` refuted for "no cited source." On microservices it cut
+   survivors 16→7. → research skeptic judges ACCURACY not provenance; synthesis sees
+   the full union (unverified = hedged, never deleted).
+3. Result is gated on `tkind==RESEARCH` / config flags — code-audit behavior unchanged
+   (103 tests green).
+
 ## Status of the "honest next steps" above
 
 1. **Execution / ground-truth — DONE.** `execute.py` (isolated `-I` subprocess) +
