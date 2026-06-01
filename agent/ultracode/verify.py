@@ -57,23 +57,29 @@ def _skeptic_prompt(finding: Finding, lens: VerifyLens, context: str = "") -> st
 def _vote_from_result(entry: Dict[str, Any], lens: VerifyLens) -> VerifierVote:
     """Parse one skeptic's delegate-result entry into a vote.
 
-    Testimony discipline: a non-completed task, an unparseable reply, or a verdict
-    asserted with no rationale all collapse to REFUTED (uncertain), never silently
-    to 'confirmed'."""
+    A vote only COUNTS (as a confirm or a kill) if it is a completed, parseable
+    verdict WITH a stated mechanism — this enforces both 'reports are testimony'
+    (non-completion / garble = UNKNOWN) and 'kill-the-killer' (a refutation must
+    state its mechanism). Everything that doesn't count becomes PARTIAL = ABSTAIN:
+    it neither confirms nor kills, so an UNKNOWN can't silently destroy a true
+    finding (the asymmetric-rejection failure the doctrine warned about)."""
+    def abstain(note: str) -> VerifierVote:
+        return VerifierVote(lens, Verdict.PARTIAL, rationale=f"abstain: {note}").validate()
+
     if not isinstance(entry, dict) or entry.get("status") != "completed":
-        return VerifierVote(lens, Verdict.REFUTED, rationale="skeptic did not complete; treated as unverified").validate()
+        return abstain("skeptic did not complete (UNKNOWN, not a kill)")
     parsed = extract_json(entry.get("summary") or "")
     if not isinstance(parsed, dict) or "verdict" not in parsed:
-        return VerifierVote(lens, Verdict.REFUTED, rationale="skeptic reply unparseable; treated as unverified").validate()
+        return abstain("skeptic reply unparseable")
     raw_verdict = str(parsed.get("verdict", "")).strip().lower()
     rationale = str(parsed.get("rationale", "")).strip()
     try:
         verdict = Verdict(raw_verdict)
     except ValueError:
-        return VerifierVote(lens, Verdict.REFUTED, rationale=f"unknown verdict {raw_verdict!r}; treated as unverified").validate()
-    # Kill-the-killer / testimony: a confirm or kill with no stated mechanism is not trustworthy.
+        return abstain(f"unknown verdict {raw_verdict!r}")
+    # a confirm or a kill with no mechanism does not count — it abstains.
     if verdict in (Verdict.CONFIRMED, Verdict.REFUTED) and not rationale:
-        return VerifierVote(lens, Verdict.REFUTED, rationale="verdict asserted with no mechanism; treated as unverified").validate()
+        return abstain("verdict asserted with no mechanism")
     return VerifierVote(lens, verdict, rationale=rationale).validate()
 
 
@@ -86,7 +92,15 @@ def verify_findings(
     lenses: Optional[List[VerifyLens]] = None,
     delegate_fn: Optional[Callable[..., str]] = None,
     toolsets: Optional[List[str]] = None,
+    survival_mode: str = "defend",
 ) -> List[Finding]:
+    """survival_mode:
+    - "defend" (default, for FINDINGS that carry their own evidence): a finding
+      survives UNLESS a quorum of skeptics refutes it WITH a mechanism. Protects
+      true positives from miscalibrated kills (the doctrine's symmetric burden).
+    - "prove" (for bare CLAIMS that carry no evidence): a claim survives ONLY IF a
+      quorum of skeptics confirms it. Catches subtly-false claims a single pass
+      would accept."""
     """Run the skeptic pool over ``findings`` and annotate each with votes,
     aggregate verdict, and ``survived``.
 
@@ -126,21 +140,22 @@ def verify_findings(
 
     quorum = cfg.effective_quorum(n_lenses)
     for fi, finding in enumerate(findings):
-        votes: List[VerifierVote] = []
-        for li, lens in enumerate(lenses):
-            entry = by_index.get(fi * n_lenses + li, {})
-            votes.append(_vote_from_result(entry, lens))
+        votes = [_vote_from_result(by_index.get(fi * n_lenses + li, {}), lens) for li, lens in enumerate(lenses)]
         finding.votes = votes
-        confirmed = sum(1 for v in votes if v.verdict == Verdict.CONFIRMED)
-        refuted = sum(1 for v in votes if v.verdict == Verdict.REFUTED)
-        finding.survived = confirmed >= quorum
-        # aggregate verdict: survival => confirmed; clear majority refuted => refuted; else partial
-        if finding.survived:
-            finding.verdict = Verdict.CONFIRMED
-        elif refuted > n_lenses - quorum:
-            finding.verdict = Verdict.REFUTED
-        else:
-            finding.verdict = Verdict.PARTIAL
+        # only mechanism-backed verdicts count (abstains are PARTIAL, see _vote_from_result)
+        confirms = sum(1 for v in votes if v.verdict == Verdict.CONFIRMED)
+        kills = sum(1 for v in votes if v.verdict == Verdict.REFUTED)
+        if survival_mode == "prove":
+            finding.survived = confirms >= quorum
+            finding.verdict = Verdict.CONFIRMED if finding.survived else Verdict.REFUTED
+        else:  # "defend"
+            finding.survived = kills < quorum
+            if not finding.survived:
+                finding.verdict = Verdict.REFUTED
+            elif confirms >= 1:
+                finding.verdict = Verdict.CONFIRMED
+            else:
+                finding.verdict = Verdict.PARTIAL  # survived but unverified — report with caveat
         finding.validate()
     return findings
 

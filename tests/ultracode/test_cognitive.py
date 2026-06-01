@@ -42,28 +42,50 @@ def test_verify_survival_by_quorum():
     assert [f.claim for f in survivors(findings)] == ["real bug"]
 
 
-def test_verify_default_refuted_on_noncompletion():
+def test_verify_noncompletion_abstains_not_kills():
+    # defend mode: a finding carries its own evidence; a skeptic that doesn't
+    # complete ABSTAINS (UNKNOWN) and must NOT silently kill a real finding.
     findings = [Finding(claim="x", locator="a:1")]
 
     def fn(*, tasks, parent_agent, role):
-        # all skeptics fail to complete -> must default to refuted
         return json.dumps({"results": [{"task_index": i, "status": "timeout", "summary": None} for i in range(len(tasks))]})
 
     verify_findings(findings, config=UltracodeConfig(), delegate_fn=fn)
-    assert findings[0].survived is False
-    assert all(v.verdict == Verdict.REFUTED for v in findings[0].votes)
+    assert findings[0].survived is True            # UNKNOWN does not kill
+    assert findings[0].verdict == Verdict.PARTIAL  # but it stays unverified
+    assert all(v.verdict == Verdict.PARTIAL for v in findings[0].votes)
 
 
-def test_verify_no_mechanism_downgraded():
+def test_verify_no_mechanism_does_not_confirm():
+    # a 'confirmed' with no mechanism abstains — neither confirms nor kills.
     findings = [Finding(claim="x", locator="a:1")]
 
     def fn(*, tasks, parent_agent, role):
-        # confirm but with NO rationale -> testimony discipline downgrades to refuted
         return json.dumps({"results": [{"task_index": i, "status": "completed",
                                         "summary": json.dumps({"verdict": "confirmed", "rationale": ""})} for i in range(len(tasks))]})
 
     verify_findings(findings, config=UltracodeConfig(), delegate_fn=fn)
-    assert findings[0].survived is False  # confirmations without mechanism don't count
+    assert findings[0].survived is True            # not killed
+    assert findings[0].verdict == Verdict.PARTIAL  # but NOT confirmed (no mechanism)
+
+
+def test_verify_prove_mode_for_claims():
+    # prove mode: a bare claim survives ONLY if a quorum confirms it with mechanism.
+    true_claim = Finding(claim="this is a real true claim")
+    false_claim = Finding(claim="this is a false claim")
+
+    def fn(*, tasks, parent_agent, role):
+        results = []
+        for i, t in enumerate(tasks):
+            claim = t["goal"].split("CLAIM:", 1)[1].split("\n", 1)[0].strip()
+            v = "confirmed" if "true" in claim else "refuted"
+            results.append({"task_index": i, "status": "completed",
+                            "summary": json.dumps({"verdict": v, "rationale": "mechanism"})})
+        return json.dumps({"results": results})
+
+    verify_findings([true_claim, false_claim], config=UltracodeConfig(), delegate_fn=fn, survival_mode="prove")
+    assert true_claim.survived is True
+    assert false_claim.survived is False
 
 
 # ----------------------------- discovery -----------------------------------

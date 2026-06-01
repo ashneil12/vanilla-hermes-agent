@@ -46,7 +46,8 @@ def baseline_judge(client, task):
 
 def ultracode_judge(client, task, cfg):
     findings = [Finding(claim=c.text).validate() for c in task.claims]
-    verify_findings(findings, context=task.code, config=cfg,
+    # claims carry no evidence -> "prove" mode: survive only if a quorum confirms.
+    verify_findings(findings, context=task.code, config=cfg, survival_mode="prove",
                     lenses=cfg.verify_lenses, delegate_fn=client.delegate_fn)
     return [bool(f.survived) for f in findings]  # survived == judged TRUE
 
