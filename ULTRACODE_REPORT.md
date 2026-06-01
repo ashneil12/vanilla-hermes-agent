@@ -378,6 +378,22 @@ A `research_factcheck_gate` is redundant with the post-loop verify. Per-`aux_cal
 try/except would *hide* loud failures (exceptions propagating is the desired behavior).
 Two dead config flags removed. **104 tests green.**
 
+## UPDATE — hardening pass #2 (the new deep-research/corpus code)
+
+A focused red-team of `corpus.py` + the research synthesis/depth path + the polarity
+guard: 5 confirmed, 1 high. The verifiers again earned their keep — they *rejected* the
+naive "truncate survivors to top-50" fix as harmful (it would delete verified findings).
+Shipped:
+- **Synthesis no longer silently drops findings at scale (high).** The prose landscape
+  synth is one bounded generation, so at high finding counts it condenses lossily
+  (observed 0.91 vs union 1.00 on the 80-item openclaw run) — the one narrowing step
+  with no cap accounting. Fix: the deduped union is the authoritative deliverable —
+  above a threshold, `corpus.py` appends the complete itemized union to the answer and
+  ANNOUNCES it (honoring the codebase's own `announce_caps` rule). Never truncates.
+- Dropped `without` from the negation regex (it false-split legitimate near-duplicate
+  merges — "works without issues" isn't a negation).
+- Clearer empty-corpus message (names the root + ext filter). **108 tests green.**
+
 ## Status of the "honest next steps" above
 
 1. **Execution / ground-truth — DONE.** `execute.py` (isolated `-I` subprocess) +
