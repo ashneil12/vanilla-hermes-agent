@@ -1,0 +1,175 @@
+{
+  "files": 15,
+  "chunks": 18,
+  "seconds": 59.5,
+  "usage": {
+    "calls": 31,
+    "prompt_tokens": 35005,
+    "completion_tokens": 37079,
+    "total_tokens": 72084,
+    "errors": 0
+  },
+  "emergent": true,
+  "agent_strategy": {
+    "reasoning": "Highest-risk areas are the first-party code: OpenClaw/Engine (game logic, networking, input), OpenClaw/ root (main entry points), libwap (custom library), and MidiProc (audio processing). Third-party libraries are well-tested and less likely to have vulnerabilities. Exclude test directories and examples.",
+    "include_substr": [
+      "OpenClaw/Engine",
+      "OpenClaw/",
+      "libwap/",
+      "MidiProc/"
+    ],
+    "exclude_substr": [
+      "libwap_tests",
+      "Testbed",
+      "HelloWorld",
+      "ThirdParty",
+      "Box2D",
+      "examples",
+      "docs",
+      "tests"
+    ],
+    "max_files": 16,
+    "verify_severities": [
+      "critical",
+      "high"
+    ]
+  },
+  "caps": [
+    "agent-decided strategy: Highest-risk areas are the first-party code: OpenClaw/Engine (game logic, networking, input), OpenClaw/ root (main entry points), libwap (custom library), and MidiProc (audio processing). Third-party ",
+    "audited 18 chunks / 15 files; 17 raw findings"
+  ],
+  "survivors": [
+    {
+      "claim": "Unhandled std::stoi exception in teleport command may crash the game on malformed input",
+      "evidence": "At line 149, `std::stoi(commandArgs[1])` is called without try-catch. If the user enters a non-numeric argument (e.g., 'teleport abc 123'), std::stoi throws std::invalid_argument or std::out_of_range, crashing the process. The same pattern repeats at lines 150, 174, and 197.",
+      "locator": "OpenClaw/Engine/GameApp/CommandHandler.cpp:149",
+      "severity": "medium",
+      "source_label": "OpenClaw/Engine/GameApp/CommandHandler.cpp",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::openclaw/engine/gameapp/commandhandler.cpp:149::unhandled-std-stoi-excep"
+    },
+    {
+      "claim": "Potential null pointer dereference of PowerupComponent in AddPowerup due to assert removal in release builds",
+      "evidence": "At line 46, `assert(pPowerupComponent)` guards the pointer. In release builds, assert is compiled away, so if `MakeStrongPtr` returns null (e.g., component missing), line 48 calls `pPowerupComponent->ApplyPowerup(...)` on a null pointer, leading to undefined behavior/crash.",
+      "locator": "OpenClaw/Engine/GameApp/CommandHandler.cpp:48",
+      "severity": "medium",
+      "source_label": "OpenClaw/Engine/GameApp/CommandHandler.cpp",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::openclaw/engine/gameapp/commandhandler.cpp:48::potential-null-pointer-d"
+    },
+    {
+      "claim": "COMMAND_SET_BOOL_VALUE macro uses substring matching, potentially enabling/disabling cheats unintentionally",
+      "evidence": "The macro at line 21 does `commandStr.find(targetCommandNameStr) != std::string::npos`, so any command containing the cheat name (e.g., 'showInfiniteAmmo') activates the logic. Then it sets the cheat value based on presence of '1','On','on','True','true','Yes','yes' in the whole command. If none found, the cheat is set to false. This can accidentally toggle cheats without the user's explicit intent (e.g., typing 'infoInfiniteAmmo' would disable infinite ammo).",
+      "locator": "OpenClaw/Engine/GameApp/CommandHandler.cpp:79",
+      "severity": "low",
+      "source_label": "OpenClaw/Engine/GameApp/CommandHandler.cpp",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::openclaw/engine/gameapp/commandhandler.cpp:79::command-set-bool-value-m"
+    },
+    {
+      "claim": "Missing NULL check on `song` pointer in MidiRPC_AddChunk",
+      "evidence": "If MidiRPC_AddChunk is called before MidiRPC_PrepareNewSong, `song` is NULL; the call `song->addChunk(...)` will dereference a null pointer, causing a crash. The same applies to MidiRPC_PlaySong and other functions.",
+      "locator": "MidiProc/main.cpp:259",
+      "severity": "medium",
+      "source_label": "MidiProc/main.cpp",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::midiproc/main.cpp:259::missing-null-check-on-so"
+    },
+    {
+      "claim": "Realloc return value not checked in SongBuffer::addChunk",
+      "evidence": "`realloc` can return NULL on failure; the code assigns the result directly to `buffer` without checking. A subsequent `memcpy` would write through a null pointer, causing a crash or potential exploitation if memory is exhausted.",
+      "locator": "MidiProc/main.cpp:215",
+      "severity": "medium",
+      "source_label": "MidiProc/main.cpp",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::midiproc/main.cpp:215::realloc-return-value-not"
+    },
+    {
+      "claim": "Memory leak on initialization failure: m_pGame allocated but not deleted if ClawGameLogic::Initialize() returns false.",
+      "evidence": "At line 7, m_pGame is allocated via new. At line 8, if Initialize() fails, the function logs an error and returns NULL at line 11 without deleting m_pGame, causing a memory leak.",
+      "locator": "OpenClaw/ClawGameApp.cpp:7",
+      "severity": "low",
+      "source_label": "OpenClaw/ClawGameApp.cpp",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::openclaw/clawgameapp.cpp:7::memory-leak-on-initializ"
+    },
+    {
+      "claim": "Memory leak: VGetGameAppDirectory returns pointer from SDL_GetBasePath() without indicating ownership; caller may not free, causing resource leak.",
+      "evidence": "SDL_GetBasePath() allocates memory that must be freed with SDL_free(), but the method returns a const char* with no ownership transfer, likely leading to leak.",
+      "locator": "OpenClaw/ClawGameApp.h:9",
+      "severity": "info",
+      "source_label": "OpenClaw/ClawGameApp.h",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::openclaw/clawgameapp.h:9::memory-leak-vgetgameappd"
+    },
+    {
+      "claim": "Potential null pointer dereference: VGetGameAppDirectory returns result of SDL_GetBasePath() without checking for NULL, which can occur if SDL is not initialized.",
+      "evidence": "SDL_GetBasePath() can return NULL on error; returning that pointer to caller without validation may cause crash when used.",
+      "locator": "OpenClaw/ClawGameApp.h:9",
+      "severity": "low",
+      "source_label": "OpenClaw/ClawGameApp.h",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::openclaw/clawgameapp.h:9::potential-null-pointer-d"
+    },
+    {
+      "claim": "TeleportActorDelegate permits arbitrary teleportation of any actor without validation",
+      "evidence": "The delegate processes EventData_Teleport_Actor using the provided actor ID and destination coordinates (lines 229-238). It directly sets physics position and actor position with no authorization check, allowing an attacker to teleport any actor anywhere.",
+      "locator": "OpenClaw/ClawGameLogic.cpp:225",
+      "severity": "medium",
+      "source_label": "OpenClaw/ClawGameLogic.cpp",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::openclaw/clawgamelogic.cpp:225::teleportactordelegate-pe"
+    },
+    {
+      "claim": "NewLifeDelegate allows unauthorized life addition to any actor",
+      "evidence": "The delegate processes EventData_New_Life with an actor ID and number of lives (line 206). It adds lives (line 220) without any access control, enabling an attacker to grant infinite lives to any actor.",
+      "locator": "OpenClaw/ClawGameLogic.cpp:204",
+      "severity": "low",
+      "source_label": "OpenClaw/ClawGameLogic.cpp",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::openclaw/clawgamelogic.cpp:204::newlifedelegate-allows-u"
+    },
+    {
+      "claim": "RequestChangeAmmoTypeDelegate permits unauthorized ammo type change for any actor",
+      "evidence": "The delegate receives EventData_Request_Change_Ammo_Type with an actor ID and changes the actor's ammo type (line 258) without verifying ownership or permission.",
+      "locator": "OpenClaw/ClawGameLogic.cpp:241",
+      "severity": "low",
+      "source_label": "OpenClaw/ClawGameLogic.cpp",
+      "raw": {},
+      "verdict": null,
+      "votes": [],
+      "survived": null,
+      "dedup_key": "loc::openclaw/clawgamelogic.cpp:241::requestchangeammotypedel"
+    }
+  ]
+}

@@ -3,6 +3,43 @@
 _Built autonomously overnight on branch `feat/ultracode-tier3` in an isolated
 worktree. Your `main` was never touched; nothing pushed. 76 tests green, 14 commits._
 
+## UPDATE 2 — repo-scale auditing + me-as-benchmark tuning
+
+The harness now ingests a **directory**, not just one blob (`agent/ultracode/repo.py`).
+Given `(root, task)`, the agent **scouts** the repo, **decides the decomposition
+itself** (which high-risk paths, one finder per file — *emergent*, not hardcoded —
+`audit_codebase`), then fans out one finder per file concurrently (the thread-safe
+`delegate_task` + 100-agent concurrency), reconciles across files, and verifies the
+load-bearing severities. Scales linearly: N files → N finders.
+
+**Validated on three genuinely massive real codebases** (`deepseek-v4-flash`):
+
+| repo | size | files audited | findings (verified) | time / cost |
+|---|---|---|---|---|
+| saleor (Python e-commerce) | 200k LOC | 27 | 30 (2 high incl. JWT-no-verify, IDOR) | 99s / 207k tok |
+| **hermes-agent (this fork, self-audit)** | 448k LOC | 17 | 44 (28 high/critical: OAuth token leak, PATH→subprocess RCE, SSRF, missing authz, API-key-in-debug-dump) | 157s / 537k tok |
+| openclaw (C++ game engine) | 237k LOC | 15 | 11 (real memory-safety: unchecked realloc, null derefs, std::stoi crashes) | 60s / 72k tok |
+
+**Me-as-benchmark tuning.** I audited the same 24 saleor files myself (Claude
+Workflow, 19 deep findings) and diffed against the harness. Two gaps surfaced and
+were fixed:
+- **Scoping** — flash defaulted to "all" + alphabetical (audited *linter rules*).
+  Fixed: exclude non-source dirs + a strategy prompt that forbids "all" and forces
+  ranking by risk + a security-relevance fallback ranking. Result: 8 junk findings
+  → **30 real** (the agent now reasons "auth/payment/permission are highest-risk").
+- **Reasoning depth** — flash pattern-matched surface issues; I traced data-flow
+  and cross-function inconsistencies (a token regenerated twice, a `cast()` no-op
+  TOCTOU, raw-vs-normalized email). Fixed: a finder *method* (trace input→sink,
+  check cross-branch consistency, TOCTOU, guard no-ops). Residual depth gap is the
+  weak model itself — narrowed by prompts, fully closable only with execution-based
+  verification or a stronger verifier.
+
+**`delegate_task` thread-safety patched** (the on-runtime 100-parallel blocker):
+serialized the global-tool-names mutation; the fork's own **135 delegate tests
+pass**, so sequential behavior is unchanged and concurrent fan-out is now safe.
+
+---
+
 ## UPDATE — discernment changes the verdict
 
 After the first benchmark pass showed ultracode losing on cost, I added the piece
