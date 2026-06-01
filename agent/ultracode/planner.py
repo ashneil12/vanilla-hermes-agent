@@ -142,7 +142,18 @@ _APPROACH_SYSTEM = (
     "loop for unbounded 'find-all'; judge-panel for open-ended/creative)? How do you cut it into independent "
     "sub-tasks (the work-list)? What should each worker actually produce, and how? And crucially: what does "
     "VERIFICATION mean for THIS task — what would a skeptic check to know a result is real (a bug's mechanism? "
-    "a claim's source? an argument's logic? a design's failure mode?)? Decide all of it yourself."
+    "a claim's source? an argument's logic? a design's failure mode?)? Decide all of it yourself.\n\n"
+    "Three principles hold whatever the task — bake them into the directives you write:\n"
+    "1. DEPTH: each worker OWNS its slice and EXHAUSTS it with specifics (exact names, numbers, bounds, "
+    "mechanisms, canonical examples). A worker that re-answers the whole question or stops at the obvious has "
+    "gone shallow and wasted the fan-out — say so in your worker_directive.\n"
+    "2. VERIFICATION FITS THE TASK: the skeptic checks what would actually make THIS kind of result real. For "
+    "code that's a bug's data-flow/mechanism; for factual claims it's ACCURACY — is the claim correct? — NOT "
+    "whether well-established knowledge happens to carry a formal citation. A result that is merely unproven is "
+    "HEDGED, never deleted.\n"
+    "3. SYNTHESIS PRESERVES: combine so that NO real sub-point your workers surfaced is dropped; keep every "
+    "specific verbatim; present uncertain material as uncertain rather than discarding it. If the answer has "
+    "natural parts/facets, organize by them and cover every one."
 )
 
 

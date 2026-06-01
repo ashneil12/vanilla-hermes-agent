@@ -279,10 +279,11 @@ def run(
                                        aux_call_fn=aux_call_fn, agent=agent, model=model)
             if not subtasks:
                 return []  # planner declares the surface exhausted -> contributes to dry
-        # research: give each finder a per-facet DEPTH mandate so the fan-out buys
-        # coverage (each owns one facet, goes deep) instead of N shallow re-answers.
+        # research depth: when the agent reasoned out its OWN worker_directive, trust it
+        # (the plan_approach meta-prompt already teaches depth-per-slice). Only inject the
+        # hardcoded per-facet depth mandate as a FALLBACK, when the agent gave us nothing.
         def _directive_for(st_goal: str) -> str:
-            if tkind == TaskKind.RESEARCH:
+            if tkind == TaskKind.RESEARCH and not approach.ok:
                 return worker_directive + "\n" + research_depth_directive(st_goal)
             return worker_directive
         tasks = [{"goal": _finder_prompt(st.goal, context, st.context, known, _directive_for(st.goal))} for st in subtasks]
@@ -381,23 +382,25 @@ def _synthesize(task, survivors, all_findings, *, crit_note, model, rt, aux_call
     # not filter coverage). code: keep the short load-bearing dissent list.
     refuted_for_synth = refuted if landscape else refuted[:10]
     dissent = "\n".join(f"- {f.claim} ({f.locator})" for f in refuted_for_synth) or "(none)"
-    extra = ("\nADDITIONAL GUIDANCE (supplementary — the structure above always wins): " + synth_directive
-             if synth_directive.strip() else "")
+    agent_driven = bool(synth_directive.strip())
     if landscape:
         # DEEP RESEARCH: lead-first synthesis is ANTI-depth — it collapses the per-facet
-        # investigation the fan-out paid for into one headline. Organize BY FACET and
-        # preserve every specific, so the depth survives into the answer.
-        sys_prompt = "You are the research synthesizer. Organize by facet; preserve every specific; never summarize a specific into generic prose."
-        instr = (
-            "Write the final research answer. Organize it BY FACET / claim-axis — use the facets implied by the "
-            "findings as section headings, and COVER EVERY facet (if one is thin, say so explicitly; never drop it). "
-            "Under each facet present: (1) SETTLED — consensus findings stated as fact with their source; "
-            "(2) CONTESTED — where sources disagree, give Position A (sources) vs Position B (sources) and which is "
-            "better-supported; (3) UNVERIFIED — claims still under review, hedged. PRESERVE every specific verbatim: "
-            "names, dates, numbers, bounds, mechanisms, example systems — a specific dropped is coverage lost. "
-            "Lead with STRUCTURE (the facet map), not a single fact. Do not pad; do not repeat."
-        ) + extra
+        # investigation the fan-out paid for. When the AGENT reasoned out its own synthesis
+        # approach (the meta-prompt teaches it to organize-by-facet/preserve-specifics/hedge-
+        # don't-drop), USE IT verbatim. Only fall back to a hardcoded structure if it didn't.
+        sys_prompt = "You are the research synthesizer. Preserve every specific; present uncertain material as uncertain, never drop it."
         max_tok = 6000
+        if agent_driven:
+            instr = ("Write the final research answer following YOUR OWN planned synthesis approach:\n"
+                     + synth_directive)
+        else:
+            instr = (  # fallback only: the agent gave no synthesis_directive
+                "Write the final research answer. Organize it BY FACET / claim-axis and COVER EVERY facet "
+                "(if one is thin, say so; never drop it). For each: SETTLED facts (with source), CONTESTED "
+                "points (Position A vs B, which is better-supported), and UNVERIFIED claims (hedged, not dropped). "
+                "PRESERVE every specific verbatim — names, numbers, bounds, mechanisms, example systems. "
+                "Lead with STRUCTURE, not a single fact. Do not pad; do not repeat."
+            )
     else:
         sys_prompt = "You are the synthesizer. Ranked, lead-first, calibrated, no padding."
         instr = (
@@ -405,7 +408,7 @@ def _synthesize(task, survivors, all_findings, *, crit_note, model, rt, aux_call
             "Present only verified findings as fact; clearly hedge anything unverified. "
             "If a refuted item is the strongest objection to your conclusion, surface it as a minority report. "
             "Be concrete and ranked; do not pad."
-        ) + extra
+        ) + ("\nADDITIONAL GUIDANCE (supplementary): " + synth_directive if agent_driven else "")
         max_tok = 2500
     dissent_header = (
         "REPORTED BUT UNVERIFIED (a skeptic doubted these — do NOT drop them: place each in the right "
