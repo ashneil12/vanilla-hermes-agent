@@ -83,7 +83,7 @@ def _pruned_dir(dirname: str, exclude_substr: Tuple[str, ...]) -> bool:
 def chunk_repo(
     root: str,
     *,
-    ext: str = ".py",
+    ext=".py",
     max_chunk_lines: int = 350,
     max_files: Optional[int] = None,
     include_substr: Tuple[str, ...] = (),
@@ -95,11 +95,12 @@ def chunk_repo(
     ``prioritize`` is set, the per-file cap selects the highest security-relevance
     files (by path keywords) instead of alphabetical — robustness against a weak
     model's empty/unreliable strategy."""
+    exts = (ext,) if isinstance(ext, str) else tuple(ext)  # accept ".py" or (".py", ".md", ...)
     paths: List[str] = []
     for dirpath, dirs, files in os.walk(root):
         dirs[:] = [d for d in dirs if not _pruned_dir(d, exclude_substr)]
         for fn in files:
-            if not fn.endswith(ext):
+            if not fn.endswith(exts):
                 continue
             full = os.path.join(dirpath, fn)
             rel = os.path.relpath(full, root)
