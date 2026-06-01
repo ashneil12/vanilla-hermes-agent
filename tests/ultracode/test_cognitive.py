@@ -246,9 +246,28 @@ def test_voi_severity_weighted_lens_count():
 
     cfg = UltracodeConfig(verify_lenses=[VerifyLens.CORRECTNESS, VerifyLens.SECURITY, VerifyLens.REPRODUCES])
     verify_findings([crit, med, low], config=cfg, delegate_fn=fn)
-    assert len(crit.votes) == 3 and len(med.votes) == 2 and len(low.votes) == 1
-    assert calls["n"] == 6  # 3+2+1, not 9 — a 33% skeptic-call cut on this mix
+    # critical/high keep all lenses; non-critical get 2 (never 1 — a kill needs a quorum of 2)
+    assert len(crit.votes) == 3 and len(med.votes) == 2 and len(low.votes) == 2
+    assert calls["n"] == 7  # 3+2+2, not 9 — saves a lens on the non-critical without 1-lens fragility
     assert all(f.survived for f in (crit, med, low))  # all confirmed -> all survive
+
+
+def test_voi_low_severity_cannot_be_killed_by_a_single_skeptic():
+    # the large-dense regression: one over-zealous skeptic must NOT kill a real
+    # low-severity finding. With 2 lenses, a single refute is insufficient.
+    low = Finding(claim="minor issue", locator="x:1", severity="low")
+
+    def one_refute(*, tasks, parent_agent, role):
+        # first lens refutes, second confirms -> 1 kill, not a quorum
+        out = []
+        for i in range(len(tasks)):
+            v = "refuted" if i == 0 else "confirmed"
+            out.append({"task_index": i, "status": "completed", "summary": json.dumps({"verdict": v, "rationale": "m"})})
+        return json.dumps({"results": out})
+
+    cfg = UltracodeConfig(verify_lenses=[VerifyLens.CORRECTNESS, VerifyLens.SECURITY, VerifyLens.REPRODUCES])
+    verify_findings([low], config=cfg, delegate_fn=one_refute)
+    assert low.survived is True  # 1 refute < quorum 2 -> not killed
 
 
 def test_voi_off_uses_all_lenses_uniformly():

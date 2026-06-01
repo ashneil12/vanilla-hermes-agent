@@ -120,14 +120,16 @@ def verify_findings(
     # get every lens; medium two; low/info one. Conservation of rigor — and a big
     # cost cut at scale (a 12-finding mix drops from 36 skeptics to ~half).
     def _lenses_for(severity: str) -> List[VerifyLens]:
+        # VOI triage, but NEVER drop below 2 lenses: in defend mode a kill needs a
+        # quorum, and a 1-lens finding could be killed by a SINGLE over-zealous
+        # skeptic (the large-dense benchmark killed a real bug exactly this way).
+        # critical/high get every lens; everything else gets 2 (kills still need 2).
         if not cfg.voi_verify:
             return lenses
         s = (severity or "info").strip().lower()
-        if s in ("critical", "high"):
+        if s in ("critical", "high") or len(lenses) <= 2:
             return lenses
-        if s == "medium":
-            return lenses[:2] or lenses
-        return lenses[:1] or lenses
+        return lenses[:2]
 
     # Build one sibling subagent task per (finding, lens); track the mapping so
     # variable per-finding lens counts re-assemble correctly.
