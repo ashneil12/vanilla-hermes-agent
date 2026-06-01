@@ -25,7 +25,7 @@ from agent.ultracode.discovery import discover
 from agent.ultracode.ledger import RunLedger
 from agent.ultracode.schema import Finding, StageResult, dedupe_findings
 from agent.ultracode.steering import Decision, decide
-from agent.ultracode.planner import Plan, plan as make_plan
+from agent.ultracode.planner import Plan, plan as make_plan, replan_for_gaps
 from agent.ultracode.verify import survivors as _survivors, verify_findings
 
 
@@ -137,14 +137,23 @@ def run(
 
     # --- find: one finder per subtask, looped-until-dry if the shape says so --
     def finder_round(round_idx: int, known: List[Finding]) -> List[Finding]:
-        tasks = [
-            {"goal": _finder_prompt(st.goal, context, st.context, known)}
-            for st in plan.subtasks
-        ]
-        results = delegate_fanout(tasks, parent_agent=agent, max_children=cfg.max_children, delegate_fn=delegate_fn)
+        if round_idx == 0 or not cfg.reactive_replan:
+            subtasks = plan.subtasks
+        else:
+            # emergent decomposition: re-DERIVE targeted subtasks from findings-so-far,
+            # rather than re-running the same finders. This is the behavior gap vs. a
+            # real ultracode session — the work-list is a living object.
+            summaries = [f"{f.claim} ({f.locator})" for f in known]
+            subtasks = replan_for_gaps(task, summaries, context=context, max_subtasks=cfg.max_finders,
+                                       aux_call_fn=aux_call_fn, agent=agent, model=model)
+            if not subtasks:
+                return []  # planner declares the surface exhausted -> contributes to dry
+        tasks = [{"goal": _finder_prompt(st.goal, context, st.context, known)} for st in subtasks]
+        results = delegate_fanout(tasks, parent_agent=agent, max_children=cfg.max_children,
+                                  concurrency=cfg.concurrency, delegate_fn=delegate_fn)
         found: List[Finding] = []
         for i, entry in enumerate(results):
-            label = plan.subtasks[i % len(plan.subtasks)].goal[:48] if plan.subtasks else f"finder-{i}"
+            label = subtasks[i % len(subtasks)].goal[:48] if subtasks else f"finder-{i}"
             found.extend(_parse_findings(entry if isinstance(entry, dict) else {}, f"r{round_idx}:{label}"))
         return found
 
@@ -167,7 +176,8 @@ def run(
 
     # --- adversarially verify: independent skeptics, default-to-refuted -------
     if decision.verify and findings:
-        verify_findings(findings, context=context, parent_agent=agent, config=cfg, lenses=decision.lenses, delegate_fn=delegate_fn)
+        verify_findings(findings, context=context, parent_agent=agent, config=cfg, lenses=decision.lenses,
+                        delegate_fn=delegate_fn, concurrency=cfg.concurrency)
         stages.append(f"verify({len(decision.lenses)} lenses, quorum {cfg.effective_quorum(len(decision.lenses))})")
         survs = _survivors(findings)
     else:

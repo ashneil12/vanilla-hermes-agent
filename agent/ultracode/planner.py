@@ -118,3 +118,52 @@ def plan(
         delegated=delegated,
         caps_announced=caps,
     )
+
+
+_REPLAN_SYSTEM = (
+    "You are RE-PLANNING a live investigation. Given what has ALREADY been found, your job is to find "
+    "what is STILL MISSING — areas, hypotheses, or bug-classes not yet investigated. Emit NEW, targeted "
+    "subtasks that probe the uncovered ground. Do NOT repeat what's already found. If you genuinely "
+    "believe the surface is exhausted, return an empty list — that is how the loop knows it is dry."
+)
+
+
+def replan_for_gaps(
+    task: str,
+    found_summaries: List[str],
+    *,
+    context: str = "",
+    gaps: Optional[List[str]] = None,
+    max_subtasks: int = 3,
+    aux_call_fn: Optional[Callable[..., Any]] = None,
+    agent: Any = None,
+    model: Optional[str] = None,
+) -> List[SubtaskSpec]:
+    """Emergent decomposition: given findings-so-far (and optional critic gaps),
+    generate NEW targeted subtasks for the next discovery round — the work-list as
+    a living object, re-derived from evidence rather than re-run verbatim."""
+    found = "\n".join(f"- {s}" for s in found_summaries[:60]) or "(nothing found yet)"
+    gap_block = ("\nKNOWN GAPS to target:\n" + "\n".join(f"- {g}" for g in gaps[:10])) if gaps else ""
+    user = (
+        f"TASK:\n{task}\n\n"
+        f"{('MATERIAL:' + chr(10) + context + chr(10) + chr(10)) if context else ''}"
+        f"ALREADY FOUND:\n{found}\n{gap_block}\n\n"
+        f"Produce up to {max_subtasks} NEW subtasks that investigate what is still uncovered.\n"
+        'Reply with ONLY JSON: {"subtasks":[{"goal":"<new targeted mandate>","context":"<what to focus on>"}]}. '
+        "Empty subtasks list means the surface is exhausted."
+    )
+    try:
+        text = aux_call(
+            [{"role": "system", "content": _REPLAN_SYSTEM}, {"role": "user", "content": user}],
+            model=model, temperature=0.3, max_tokens=1200,
+            main_runtime=runtime_from_agent(agent), call_fn=aux_call_fn,
+        )
+    except Exception:
+        return []
+    parsed = extract_json(text)
+    items = parsed.get("subtasks", []) if isinstance(parsed, dict) else (parsed if isinstance(parsed, list) else [])
+    out: List[SubtaskSpec] = []
+    for item in (items or [])[:max_subtasks]:
+        if isinstance(item, dict) and str(item.get("goal", "")).strip():
+            out.append(SubtaskSpec(goal=str(item["goal"]).strip(), context=str(item.get("context", "")).strip()).validate())
+    return out

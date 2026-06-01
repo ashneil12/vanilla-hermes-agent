@@ -46,6 +46,11 @@ class UltracodeConfig:
     # -- loop-until-dry discovery --
     discovery_max_rounds: int = 6
     discovery_dry_rounds: int = 2  # stop after K consecutive empty rounds
+    reactive_replan: bool = True   # re-DERIVE the work-list from findings each round (emergent decomposition) rather than re-run the same finders
+
+    # -- orchestration scale (in-flight agents). None = sequential waves (real-Hermes-safe).
+    # A concurrency-safe backend (DeepSeek client / patched Hermes core) can set this to 100+.
+    concurrency: Optional[int] = None
 
     # -- scale-to-the-ask --
     solo_by_default: bool = True   # restraint: orchestrate only on a real signal

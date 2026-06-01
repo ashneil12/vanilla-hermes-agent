@@ -93,6 +93,7 @@ def verify_findings(
     delegate_fn: Optional[Callable[..., str]] = None,
     toolsets: Optional[List[str]] = None,
     survival_mode: str = "defend",
+    concurrency: Optional[int] = None,
 ) -> List[Finding]:
     """survival_mode:
     - "defend" (default, for FINDINGS that carry their own evidence): a finding
@@ -129,6 +130,7 @@ def verify_findings(
         parent_agent=parent_agent,
         role="leaf",
         max_children=cfg.max_children,
+        concurrency=concurrency,
         delegate_fn=delegate_fn,
     )
     # delegate_fanout preserves global submission order, so result i maps to

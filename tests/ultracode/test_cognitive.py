@@ -209,3 +209,20 @@ def test_harness_solo_path():
     res = run("hi there", aux_call_fn=aux, delegate_fn=delegate, enable_ledger=False)
     assert res.mode == "solo"
     assert res.answer == "solo answer"
+
+
+def test_replan_for_gaps_returns_new_targeted_subtasks():
+    from agent.ultracode.planner import replan_for_gaps
+
+    def aux(**kwargs):
+        # only fire on the RE-PLANNING system prompt
+        assert "re-planning" in kwargs["messages"][0]["content"].lower()
+        return json.dumps({"subtasks": [{"goal": "check auth bypass"}, {"goal": "check race conditions"}]})
+
+    subs = replan_for_gaps("audit this service", ["found sqli (db:1)"], context="<code>", aux_call_fn=aux)
+    assert [s.goal for s in subs] == ["check auth bypass", "check race conditions"]
+
+
+def test_replan_empty_signals_dry():
+    from agent.ultracode.planner import replan_for_gaps
+    assert replan_for_gaps("x", [], aux_call_fn=lambda **k: json.dumps({"subtasks": []})) == []
