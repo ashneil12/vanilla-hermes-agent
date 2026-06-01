@@ -304,6 +304,23 @@ slice) while orchestration **holds at 1.00** — the gap WIDENS with scale, and 
 ran concurrently with correct finding-attribution. This is the research analog of the
 repo-scale code result, confirmed at the same order of magnitude.
 
+### REAL corpus (not synthetic): `corpus.py` reads actual files
+
+Wired the mechanism to real on-disk corpora (`agent/ultracode/corpus.py`): chunk real
+documents, fan out one EXTRACTOR per chunk (each READS its chunk), reconcile, landscape-
+synthesize. Two modes — exhaustive (read every chunk) and focused retrieval (rank by
+relevance, read top-K, ANNOUNCE skips). Proven on real code, grep-derived ground truth:
+
+| corpus | size | ground truth | baseline | orchestrated | lift |
+|---|---|---|---|---|---|
+| hermes `agent/`+`acp_adapter/` (Python) | 112 files, **~715k tok** | 42 scattered classes | **0.02** (sees 2%) | **1.00** (286 extractors) | **+0.98** |
+| openclaw `memory-host-sdk` (TypeScript) | 75 files, ~48k tok | 80 exported decls | **0.29** | **0.91** (union 1.00) | **+0.62** |
+
+The hermes run is the capstone: a real **715k-token** codebase, the single pass physically
+sees ~7% of it and recovers 1 of 42 classes; 286 chunk-extractors read every file and the
+landscape synthesis preserved all 42 into the answer (1.00). Same mechanism as the
+repo-scale CODE audit, now for research/extraction — language- and repo-agnostic.
+
 ### Agent figures out its OWN method (not a recipe) — and does it BETTER
 
 The deep-research directives are NOT hardcoded. The general PRINCIPLES (depth-per-slice;
