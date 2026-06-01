@@ -93,39 +93,64 @@ def delegate_fanout(
     parent_agent: Any = None,
     role: str = "leaf",
     max_children: int = 3,
+    concurrency: Optional[int] = None,
     delegate_fn: Optional[Callable[..., str]] = None,
 ) -> List[Dict[str, Any]]:
-    """Fan ``tasks`` out as parallel subagents, returning the flat results list.
+    """Fan ``tasks`` out as parallel subagents, returning results ordered by a
+    GLOBAL task_index.
 
-    delegate_task errors if a single call exceeds the concurrency cap, so we
-    split into waves of ``max_children`` and concatenate. Each wave still runs
-    its members in parallel; only the (rare) overflow is sequential. The number
-    of waves dropped/needed is the caller's to announce — we never silently cap.
+    Two knobs, deliberately separate:
+      * ``max_children`` — the backend's PER-CALL cap (the real Hermes
+        ``delegate_task`` errors above ``delegation.max_concurrent_children``), so
+        we split into waves of this size.
+      * ``concurrency`` — how many tasks may be IN FLIGHT at once. When it
+        exceeds ``max_children`` we dispatch multiple waves CONCURRENTLY, so a
+        backend that caps each call at 3 can still run 100 agents at once.
 
-    Returns a list of per-task result dicts (the fork's contract):
-      {task_index, status, summary, api_calls, duration_seconds, model,
-       exit_reason, tokens:{input,output}, tool_trace, [error], [stale_paths]}
-    ``task_index`` is rewritten to be global across waves.
+    ⚠️ Concurrent waves call ``delegate_fn`` from multiple threads. The REAL
+    Hermes ``delegate_task`` is NOT safe under that (it mutates the process-global
+    ``model_tools._last_resolved_tool_names`` — see CONTRACTS.md §1), so against
+    that backend leave ``concurrency`` unset (sequential waves). Concurrency-safe
+    backends (the DeepSeek bench client; a fixed Hermes core) get true scale.
+    Raising real-Hermes parallelism past the per-call cap is the upstream fix this
+    surfaces.
     """
     if not tasks:
         return []
     fn = delegate_fn or _real_delegate_task
     cap = max(1, int(max_children))
-    out: List[Dict[str, Any]] = []
-    base = 0
-    for wave_start in range(0, len(tasks), cap):
-        wave = tasks[wave_start : wave_start + cap]
-        raw = fn(tasks=wave, parent_agent=parent_agent, role=role)
-        parsed = _parse_delegate_result(raw)
-        for entry in parsed:
-            # rewrite task_index to be global, not wave-local
-            if isinstance(entry, dict):
-                local = entry.get("task_index", 0)
-                entry = dict(entry)
-                entry["task_index"] = base + (local if isinstance(local, int) else 0)
-            out.append(entry)
-        base += len(wave)
-    return out
+    waves = [(base, tasks[base : base + cap]) for base in range(0, len(tasks), cap)]
+
+    def run_wave(base_wave):
+        base, wave = base_wave
+        parsed = _parse_delegate_result(fn(tasks=wave, parent_agent=parent_agent, role=role))
+        entries: List[Dict[str, Any]] = []
+        for local in range(len(wave)):
+            entry = parsed[local] if local < len(parsed) and isinstance(parsed[local], dict) else None
+            if entry is None:
+                entries.append({"task_index": base + local, "status": "error", "summary": None,
+                                "error": "missing/invalid result for task"})
+                continue
+            e = dict(entry)
+            li = e.get("task_index", local)
+            e["task_index"] = base + (li if isinstance(li, int) and 0 <= li < len(wave) else local)
+            entries.append(e)
+        return entries
+
+    if concurrency is None or concurrency <= cap or len(waves) <= 1:
+        results: List[Dict[str, Any]] = []
+        for w in waves:
+            results.extend(run_wave(w))
+    else:
+        from concurrent.futures import ThreadPoolExecutor
+
+        wave_workers = max(1, min(len(waves), -(-int(concurrency) // cap)))  # ceil(concurrency/cap)
+        with ThreadPoolExecutor(max_workers=wave_workers) as ex:
+            collected = list(ex.map(run_wave, waves))
+        results = [e for wave_entries in collected for e in wave_entries]
+
+    results.sort(key=lambda e: e.get("task_index", 0))
+    return results
 
 
 def _parse_delegate_result(raw: Any) -> List[Dict[str, Any]]:
