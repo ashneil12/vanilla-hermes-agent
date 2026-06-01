@@ -105,7 +105,10 @@ def research_depth_directive(facet: str) -> str:
 
 _SKEPTIC = {
     TaskKind.CODE: "Does this bug actually hold? State the mechanism / data-flow. If you cannot, refute it.",
-    TaskKind.RESEARCH: "Is this claim ACCURATE and genuinely supported by its cited source? Beware citogenesis (sources that copied each other). If unsupported or wrong, refute it.",
+    TaskKind.RESEARCH: ("Is this claim factually ACCURATE? Refute ONLY if it is wrong, fabricated, or "
+                        "misattributed — NOT merely because it lacks a formal citation: well-established "
+                        "domain knowledge needs no source. When REAL sources are cited, also check source "
+                        "support and beware citogenesis (sources that copied each other)."),
     TaskKind.ANALYSIS: "Is this finding actually warranted by the material, or an overreach / unsupported inference? If unsupported, refute it.",
     TaskKind.QA: "Is this sub-answer correct and its reasoning sound? Check the logic end-to-end. If the reasoning breaks, refute it.",
     TaskKind.GENERIC: "Is this claim true and supported by a stated mechanism/evidence? If not, refute it.",

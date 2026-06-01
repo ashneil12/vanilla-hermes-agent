@@ -376,7 +376,11 @@ def _synthesize(task, survivors, all_findings, *, crit_note, model, rt, aux_call
         f"- [{f.severity}] {f.claim} ({f.locator}) — survived {sum(1 for v in f.votes if v.verdict.value=='confirmed')}/{len(f.votes)} skeptics"
         for f in survivors
     ) or "(no findings survived verification)"
-    dissent = "\n".join(f"- {f.claim} ({f.locator})" for f in refuted[:10]) or "(none)"
+    # research: a refuted claim is UNVERIFIED, not deleted — feed the full union so no
+    # discovered sub-point is dropped (verification sorts settled-vs-unverified, it does
+    # not filter coverage). code: keep the short load-bearing dissent list.
+    refuted_for_synth = refuted if landscape else refuted[:10]
+    dissent = "\n".join(f"- {f.claim} ({f.locator})" for f in refuted_for_synth) or "(none)"
     extra = ("\nADDITIONAL GUIDANCE (supplementary — the structure above always wins): " + synth_directive
              if synth_directive.strip() else "")
     if landscape:
@@ -403,10 +407,16 @@ def _synthesize(task, survivors, all_findings, *, crit_note, model, rt, aux_call
             "Be concrete and ranked; do not pad."
         ) + extra
         max_tok = 2500
+    dissent_header = (
+        "REPORTED BUT UNVERIFIED (a skeptic doubted these — do NOT drop them: place each in the right "
+        "facet under UNVERIFIED, stated cautiously; many are true sub-points that simply lacked a citation)"
+        if landscape else
+        "REFUTED/UNVERIFIED (do not present as fact; mention only if load-bearing)"
+    )
     user = (
         f"TASK:\n{task}\n\n"
         f"VERIFIED FINDINGS (survived adversarial verification):\n{surv_block}\n\n"
-        f"REFUTED/UNVERIFIED (do not present as fact; mention only if load-bearing):\n{dissent}\n\n"
+        f"{dissent_header}:\n{dissent}\n\n"
         f"COMPLETENESS NOTE: {crit_note or '(none)'}\n\n" + instr
     )
     return aux_call(
