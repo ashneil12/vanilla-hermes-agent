@@ -71,6 +71,41 @@ def confirm_by_execution(
     }
 
 
+def arbitrate_findings(
+    findings,
+    code: str,
+    *,
+    aux_call_fn=None, agent=None, model=None, run_fn=run_python,
+    only_severities=("critical", "high", "medium"),
+) -> dict:
+    """Execution as the ARBITER of disputed verdicts. For each testable finding,
+    run a repro; if it REPRODUCES, that is ground truth: confirm it, and if the
+    skeptics had killed it, RESURRECT it (the runtime overrules an unreliable
+    weak-model vote). A non-reproducing repro only annotates — it never kills,
+    because absence-of-repro is weak evidence (the repro itself may be wrong).
+    This recovers recall lost to false refutations. Returns counts."""
+    from agent.ultracode.schema import Verdict
+
+    confirmed = resurrected = 0
+    for f in findings:
+        if (f.severity or "").lower() not in only_severities:
+            continue
+        gt = confirm_by_execution(f, code, aux_call_fn=aux_call_fn, agent=agent, model=model, run_fn=run_fn)
+        f.raw = dict(f.raw or {})
+        f.raw["ground_truth"] = gt
+        if gt.get("reproduced") is True:
+            confirmed += 1
+            if not f.survived:
+                f.survived = True
+                f.verdict = Verdict.CONFIRMED
+                f.raw["arbiter"] = "RESURRECTED: reproduced by execution despite skeptic refutation"
+                resurrected += 1
+            else:
+                f.raw["arbiter"] = "confirmed by execution"
+            f.validate()
+    return {"confirmed": confirmed, "resurrected": resurrected}
+
+
 def ground_truth_pass(
     findings,
     code: str,

@@ -27,6 +27,8 @@ from agent.ultracode.schema import Finding, StageResult, dedupe_findings, reconc
 from agent.ultracode.steering import Decision, decide
 from agent.ultracode.planner import Plan, plan as make_plan, replan_for_gaps
 from agent.ultracode.triage import assess
+from agent.ultracode.kinds import TaskKind, classify_kind, worker_instruction
+from agent.ultracode.judge import judge_panel
 from agent.ultracode.verify import survivors as _survivors, verify_findings
 
 
@@ -53,20 +55,20 @@ class UltracodeResult:
         }
 
 
-def _finder_prompt(goal: str, context: str, sub_context: str, avoid: List[Finding]) -> str:
+def _finder_prompt(goal: str, context: str, sub_context: str, avoid: List[Finding], kind: str = TaskKind.CODE) -> str:
     avoid_block = ""
     if avoid:
         listed = "\n".join(f"- {f.claim} ({f.locator})" for f in avoid[:40])
-        avoid_block = f"\nALREADY FOUND (do NOT repeat these; find only NEW, distinct issues):\n{listed}\n"
+        avoid_block = f"\nALREADY FOUND (do NOT repeat these; find only NEW, distinct items):\n{listed}\n"
     return (
-        f"You are an investigator. MANDATE: {goal}\n"
+        f"You are an expert worker. MANDATE: {goal}\n"
+        f"{worker_instruction(kind)}\n"
         f"{('FOCUS: ' + sub_context + chr(10)) if sub_context else ''}"
         f"\nMATERIAL:\n{context}\n"
         f"{avoid_block}\n"
-        "Report ONLY concrete, specific, locatable findings — no speculation, no padding. "
-        "If you assert something, you must be able to point to exactly where.\n"
-        'Reply with ONLY JSON: {"findings":[{"claim":"<specific>","locator":"<file:line or section>",'
-        '"evidence":"<why it is true>","severity":"info|low|medium|high|critical"}]}. '
+        "Report ONLY concrete, specific, SUPPORTED findings — no speculation, no padding.\n"
+        'Reply with ONLY JSON: {"findings":[{"claim":"<specific>","locator":"<file:line, source, or section>",'
+        '"evidence":"<the support / mechanism>","severity":"info|low|medium|high|critical"}]}. '
         'Return {"findings":[]} if there is genuinely nothing.'
     )
 
@@ -140,14 +142,28 @@ def run(
     force_orchestrate: Optional[bool] = None,
     enable_ledger: bool = True,
     ledger_path: Optional[str] = None,
+    kind: str = "auto",
 ) -> UltracodeResult:
     cfg = config or UltracodeConfig()
     led = RunLedger(run_id, path=ledger_path) if enable_ledger else None
     rt = runtime_from_agent(agent)
 
     decision = decide(task, cfg, force_orchestrate=force_orchestrate)
+    tkind = kind if kind != "auto" else classify_kind(task, context)
     if led:
-        led.event("decision", {"orchestrate": decision.orchestrate, "shape": decision.shape.value, "reason": decision.reason})
+        led.event("decision", {"orchestrate": decision.orchestrate, "shape": decision.shape.value,
+                                "reason": decision.reason, "kind": tkind})
+
+    # GENERATIVE tasks use the judge-panel shape (N angles -> score -> graft), not find->verify
+    if tkind == TaskKind.GENERATIVE and (decision.orchestrate or force_orchestrate):
+        jr = judge_panel(task, context=context, n=cfg.max_finders, delegate_fn=delegate_fn,
+                         aux_call_fn=aux_call_fn, config=cfg, agent=agent, model=model)
+        res = UltracodeResult(task=task, mode="judge-panel", answer=jr.answer, decision=decision,
+                              stages=["judge-panel"],
+                              caps_announced=[f"judge-panel: {len(jr.candidates)} candidates from distinct angles; winner={jr.winner_angle}"])
+        if led:
+            led.event("done", res.summary())
+        return res
 
     # --- restraint: stay solo unless a real signal says otherwise -------------
     if not decision.orchestrate:
@@ -207,7 +223,7 @@ def run(
                                        aux_call_fn=aux_call_fn, agent=agent, model=model)
             if not subtasks:
                 return []  # planner declares the surface exhausted -> contributes to dry
-        tasks = [{"goal": _finder_prompt(st.goal, context, st.context, known)} for st in subtasks]
+        tasks = [{"goal": _finder_prompt(st.goal, context, st.context, known, tkind)} for st in subtasks]
         results = delegate_fanout(tasks, parent_agent=agent, max_children=cfg.max_children,
                                   concurrency=cfg.concurrency, delegate_fn=delegate_fn)
         found: List[Finding] = []
@@ -245,7 +261,7 @@ def run(
     # --- adversarially verify: independent skeptics, default-to-refuted -------
     if decision.verify and findings:
         verify_findings(findings, context=context, parent_agent=agent, config=cfg, lenses=decision.lenses,
-                        delegate_fn=delegate_fn, concurrency=cfg.concurrency)
+                        delegate_fn=delegate_fn, concurrency=cfg.concurrency, kind=tkind)
         stages.append(f"verify({len(decision.lenses)} lenses, quorum {cfg.effective_quorum(len(decision.lenses))})")
         survs = _survivors(findings)
     else:
@@ -253,13 +269,17 @@ def run(
     if led:
         led.stage(StageResult(stage="verify", findings=findings))
 
-    # --- ground-truth-once: RUN a repro to confirm survivors (opt-in) --------
-    if cfg.execution_verify and survs and context:
-        from agent.ultracode.groundtruth import ground_truth_pass
-        n_confirmed = ground_truth_pass(survs, context, aux_call_fn=aux_call_fn, agent=agent, model=model)
-        stages.append(f"ground-truth(ran repros; {n_confirmed} confirmed by execution)")
+    # --- ground-truth ARBITER: execution overrules disputed skeptic votes ----
+    # (opt-in; runs model-generated repros). A real bug a weak skeptic wrongly
+    # killed gets RESURRECTED when its repro reproduces — the runtime is the
+    # impartial arbiter that recovers recall lost to false refutation.
+    if cfg.execution_verify and findings and context:
+        from agent.ultracode.groundtruth import arbitrate_findings
+        arb = arbitrate_findings(findings, context, aux_call_fn=aux_call_fn, agent=agent, model=model)
+        survs = _survivors(findings)  # resurrected findings now survive
+        stages.append(f"arbiter(execution: {arb['confirmed']} confirmed, {arb['resurrected']} resurrected)")
         if led:
-            led.event("ground_truth", {"confirmed_by_execution": n_confirmed, "checked": len(survs)})
+            led.event("arbiter", arb)
 
     # --- completeness critic (gaps surfaced, never silently dropped) ---------
     crit = completeness_critic(task, findings, caps_announced=caps, agent=agent, aux_call_fn=aux_call_fn, model=model)

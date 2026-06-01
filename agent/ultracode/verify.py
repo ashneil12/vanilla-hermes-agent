@@ -25,6 +25,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from agent.ultracode.adapters import delegate_fanout, extract_json
 from agent.ultracode.config import UltracodeConfig
+from agent.ultracode.kinds import TaskKind, skeptic_instruction
 from agent.ultracode.schema import Finding, Verdict, VerifyLens, VerifierVote
 
 _LENS_BRIEF = {
@@ -37,10 +38,11 @@ _LENS_BRIEF = {
 }
 
 
-def _skeptic_prompt(finding: Finding, lens: VerifyLens, context: str = "") -> str:
+def _skeptic_prompt(finding: Finding, lens: VerifyLens, context: str = "", kind: str = TaskKind.CODE) -> str:
     material = f"\nMATERIAL TO CHECK THE CLAIM AGAINST (ground truth — read it, do not guess):\n{context}\n" if context else ""
     return (
         f"You are an adversarial verifier. Your job is to REFUTE the claim below, not to confirm it.\n"
+        f"WHAT TO CHECK: {skeptic_instruction(kind)}\n"
         f"LENS: {lens.value} — {_LENS_BRIEF.get(lens, 'Attack the claim on its merits.')}\n"
         f"{material}\n"
         f"CLAIM: {finding.claim}\n"
@@ -95,6 +97,7 @@ def verify_findings(
     toolsets: Optional[List[str]] = None,
     survival_mode: str = "defend",
     concurrency: Optional[int] = None,
+    kind: str = TaskKind.CODE,
 ) -> List[Finding]:
     """survival_mode:
     - "defend" (default, for FINDINGS that carry their own evidence): a finding
@@ -137,7 +140,7 @@ def verify_findings(
     task_map: List[tuple] = []  # (finding_index, lens)
     for fi, f in enumerate(findings):
         for lens in _lenses_for(f.severity):
-            t: Dict[str, Any] = {"goal": _skeptic_prompt(f, lens, context)}
+            t: Dict[str, Any] = {"goal": _skeptic_prompt(f, lens, context, kind)}
             if toolsets is not None:
                 t["toolsets"] = list(toolsets)
             tasks.append(t)

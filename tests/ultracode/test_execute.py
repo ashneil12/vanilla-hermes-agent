@@ -55,6 +55,27 @@ def test_confirm_by_execution_does_not_reproduce():
     assert gt["reproduced"] is False  # annotation only, never a kill
 
 
+def test_arbiter_resurrects_killed_finding_that_reproduces():
+    from agent.ultracode.groundtruth import arbitrate_findings
+    from agent.ultracode.schema import Verdict
+    # a REAL bug the skeptics wrongly killed; its repro reproduces -> resurrect
+    f = Finding(claim="crash on empty input", locator="x:1", severity="high")
+    f.survived = False
+    f.verdict = Verdict.REFUTED
+    arb = arbitrate_findings([f], "<code>", aux_call_fn=lambda **k: "import sys\nsys.exit(0)")
+    assert arb["resurrected"] == 1
+    assert f.survived is True and f.verdict == Verdict.CONFIRMED
+    assert "RESURRECTED" in f.raw["arbiter"]
+
+
+def test_arbiter_does_not_kill_on_nonrepro():
+    from agent.ultracode.groundtruth import arbitrate_findings
+    f = Finding(claim="maybe a bug", locator="y:1", severity="high")
+    f.survived = True
+    arbitrate_findings([f], "<code>", aux_call_fn=lambda **k: "import sys\nsys.exit(1)")
+    assert f.survived is True  # non-reproduction only annotates, never kills
+
+
 def test_ground_truth_pass_annotates_and_counts():
     findings = [
         Finding(claim="real crash", locator="a:1", severity="critical"),
