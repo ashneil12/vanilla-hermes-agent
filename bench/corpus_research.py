@@ -65,23 +65,31 @@ def score(answer, facts):
 
 def main():
     model = sys.argv[1] if len(sys.argv) > 1 else "deepseek-v4-flash"
-    n_docs = int(sys.argv[2]) if len(sys.argv) > 2 else 40
+    n_docs = int(sys.argv[2]) if len(sys.argv) > 2 else 200
     chunk_docs = int(sys.argv[3]) if len(sys.argv) > 3 else 5
+    # one context window's worth of chars the single pass can actually see. A single call
+    # CANNOT see beyond its context, full stop — beyond this you MUST chunk. (~100k tokens.)
+    baseline_budget = int(sys.argv[4]) if len(sys.argv) > 4 else 400_000
     corpus, facts = make_corpus(n_docs)
     docs = corpus.split("\n\n=== ")
     docs = [docs[0]] + ["=== " + d for d in docs[1:]]
-    print(f"corpus: {n_docs} docs, {len(corpus)} chars (~{len(corpus)//4} tokens), {len(facts)} fabricated facts", flush=True)
+    print(f"corpus: {n_docs} docs, {len(corpus)} chars (~{len(corpus)//4} tokens), {len(facts)} fabricated facts; "
+          f"baseline context budget={baseline_budget} chars (~{baseline_budget//4} tokens)", flush=True)
 
-    # --- baseline: ONE pass over the whole corpus ---
+    # --- baseline: ONE pass; sees only what fits ONE context window ---
     cb = DeepSeekClient(model=model, max_workers=4)
+    seen = corpus[:baseline_budget]
+    facts_in_view = [n for n, sig in facts if all(t in seen.lower() for t in sig)]
+    truncated = len(corpus) > baseline_budget
     q = ("The corpus below contains many project briefs. Each brief states exactly one DECISION line "
          "with a project codename and a specific configured value. Extract EVERY project's codename and "
-         "its stated value. List all of them — do not skip any.\n\nCORPUS:\n" + corpus)
+         "its stated value. List all of them — do not skip any.\n\nCORPUS:\n" + seen)
     out = cb.chat([{"role": "system", "content": "Extract exhaustively and precisely."},
                    {"role": "user", "content": q}], temperature=0.2, max_tokens=4000)
     b_ans = type(cb)._content(out)
     b_cov, b_found = score(b_ans, facts)
-    print(f"BASELINE (1 pass over whole corpus): coverage={b_cov:.2f} ({len(b_found)}/{len(facts)})  "
+    print(f"BASELINE (1 pass, {'TRUNCATED to context: ' if truncated else ''}{len(facts_in_view)}/{len(facts)} facts "
+          f"physically in view): coverage={b_cov:.2f} ({len(b_found)}/{len(facts)})  "
           f"tokens={cb.usage.snapshot()['total_tokens']//1000}k", flush=True)
 
     # --- orchestrated: chunk the corpus, one focused extractor per chunk, union ---
