@@ -199,16 +199,20 @@ def run(
         if led:
             led.event("triage", {"orchestrate": tv.orchestrate, "confidence": tv.confidence,
                                   "stakes": tv.stakes, "gaps": tv.gaps, "reason": tv.reason})
-        # STAY SOLO when an ensemble cannot be JUSTIFIED. The operational test is the
-        # concrete gap-list, not the confidence scalar: a weak model's self-reported
-        # confidence is unreliable (it hedges even on trivial recall), but if it cannot
-        # NAME a single concrete thing the solo pass missed, there is nothing for an
-        # ensemble to recover — only cost to add. So: bounded (not a find-all loop),
-        # not high-stakes, NO named gaps, and a substantive solo answer -> terminate at
-        # solo. (The recall dip that motivated "always ensemble" was on open-ended
-        # find-all AUDITS, which loop_until_dry still routes to the light ensemble.)
+        # STAY SOLO unless an ensemble can be JUSTIFIED. An ensemble only earns its
+        # cost when the triage can NAME a concrete gap AND there is MATERIAL to dig
+        # into. Two weak-model failure modes this defends against:
+        #   - the confidence scalar is unreliable (it hedges even on trivial recall) —
+        #     so we gate on the concrete gap-list, not the number;
+        #   - on a near-zero-context knowledge question the model hallucinates gaps
+        #     ("could add examples"), but finders have NO material to decompose, so a
+        #     fan-out is just N redundant re-answers of the same prompt — it cannot
+        #     add recall. So a named gap over no material does NOT justify ensembling.
+        # Find-all AUDITS (loop_until_dry) and high-stakes work always ensemble.
+        no_material = len(context.strip()) < 200
+        justified_ensemble = bool(tv.gaps) and not no_material
         if (not decision.loop_until_dry and tv.stakes != "high"
-                and not tv.gaps and solo_answer.strip()):
+                and not justified_ensemble and solo_answer.strip()):
             res = UltracodeResult(task=task, mode="discerned-solo", answer=solo_answer,
                                   decision=decision, stages=["solo-audit", "triage:solo"],
                                   findings=solo_findings,
