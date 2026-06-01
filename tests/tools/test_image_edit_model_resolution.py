@@ -8,6 +8,7 @@ image_generate with reference_images routes to the edit path.
 """
 
 import os
+import json
 
 import pytest
 
@@ -97,14 +98,18 @@ class TestGenerateWithReference:
         calls = {}
 
         def fake_edit(image, prompt, aspect_ratio="auto", **kw):
-            calls["edit"] = {"image": image, "prompt": prompt}
+            calls["edit"] = {"image": image, "prompt": prompt, "aspect_ratio": aspect_ratio}
             return '{"success": true, "image": "/e.png"}'
 
         monkeypatch.setattr(ie, "image_edit_tool", fake_edit)
         out = ig._handle_image_generate(
-            {"prompt": "make it night", "reference_images": ["/prior.png"]}
+            {"prompt": "make it night", "reference_images": ["/prior.png"], "aspect_ratio": "landscape"}
         )
-        assert calls.get("edit") == {"image": "/prior.png", "prompt": "make it night"}
+        assert calls.get("edit") == {
+            "image": "/prior.png",
+            "prompt": "make it night",
+            "aspect_ratio": "16:9",
+        }
         assert "success" in out
 
     def test_multiple_references_call_compose(self, monkeypatch):
@@ -113,14 +118,15 @@ class TestGenerateWithReference:
         calls = {}
 
         def fake_compose(images, prompt, aspect_ratio="auto", **kw):
-            calls["compose"] = {"images": images, "prompt": prompt}
+            calls["compose"] = {"images": images, "prompt": prompt, "aspect_ratio": aspect_ratio}
             return '{"success": true, "image": "/c.png"}'
 
         monkeypatch.setattr(ie, "image_compose_tool", fake_compose)
         ig._handle_image_generate(
-            {"prompt": "merge", "reference_images": ["/a.png", "/b.png"]}
+            {"prompt": "merge", "reference_images": ["/a.png", "/b.png"], "aspect_ratio": "portrait"}
         )
         assert calls["compose"]["images"] == ["/a.png", "/b.png"]
+        assert calls["compose"]["aspect_ratio"] == "9:16"
 
     def test_no_reference_does_not_route_to_edit(self, monkeypatch):
         import tools.image_generation_tool as ig
@@ -133,3 +139,27 @@ class TestGenerateWithReference:
         monkeypatch.setattr(ig, "_dispatch_to_plugin_provider", lambda prompt, ar: '{"success": true, "image": "/g.png"}')
         out = ig._handle_image_generate({"prompt": "a cat"})
         assert "success" in out
+
+
+class TestImageEditRegistryDispatch:
+    """Image edit tools must accept the registry's handler(args, **kwargs) call shape."""
+
+    @pytest.mark.parametrize(
+        ("tool_name", "function_name", "args", "expected"),
+        [
+            ("image_edit", "image_edit_tool", {"image": "in.png", "prompt": "move right"}, "edit"),
+            ("image_compose", "image_compose_tool", {"images": ["a.png", "b.png"], "prompt": "merge"}, "compose"),
+            ("image_upscale", "image_upscale_tool", {"image": "in.png"}, "upscale"),
+            ("image_remove_background", "image_remove_background_tool", {"image": "in.png"}, "remove"),
+        ],
+    )
+    def test_registry_dispatch_passes_args_dict(self, monkeypatch, tool_name, function_name, args, expected):
+        from tools.registry import registry
+
+        def fake_tool(**kwargs):
+            return json.dumps({"success": True, "called": expected, "kwargs": kwargs})
+
+        monkeypatch.setattr(ie, function_name, fake_tool)
+        out = json.loads(registry.dispatch(tool_name, args))
+        assert out["success"] is True
+        assert out["called"] == expected
