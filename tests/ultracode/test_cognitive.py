@@ -199,7 +199,7 @@ def test_harness_end_to_end_ultracode():
     res = run(
         "find all security and logic bugs in this code",
         context="<code here>",
-        aux_call_fn=aux, delegate_fn=delegate,
+        aux_call_fn=aux, delegate_fn=delegate, force_orchestrate=True,  # exercise the FULL pipeline
         config=UltracodeConfig(verify_lenses=[VerifyLens.CORRECTNESS, VerifyLens.SECURITY, VerifyLens.REPRODUCES]),
         enable_ledger=False,
     )
@@ -235,15 +235,26 @@ def test_harness_discernment_light_ensembles_for_recall():
     assert any("SQL" in f.claim for f in res.survivors)
 
 
-def test_harness_discernment_escalates_when_warranted():
-    # triage says high-stakes/low-confidence -> escalate, seeded by the solo pass
+def test_harness_discernment_full_only_on_large_findall():
+    # triage escalates AND it's a large find-all -> FULL (loop). Small inputs stay light.
     aux, delegate = _make_harness_fakes(triage_orchestrate=True)
-    res = run("find all security and logic bugs in this code", context="<code>",
+    big = "def f():\n    return 1\n" * 400  # > full_orchestration_min_chars
+    res = run("find all security and logic bugs in this code", context=big,
               aux_call_fn=aux, delegate_fn=delegate, enable_ledger=False,
               config=UltracodeConfig(verify_lenses=[VerifyLens.CORRECTNESS, VerifyLens.SECURITY, VerifyLens.REPRODUCES]))
     assert res.mode == "ultracode"
-    assert res.stages[:2] == ["solo-audit", "triage:escalate"]
+    assert res.stages[:2] == ["solo-audit", "triage:full"]
     assert any("SQL" in f.claim for f in res.survivors)
+
+
+def test_harness_discernment_small_findall_stays_light():
+    # even when triage wants orchestration, a SMALL find-all stays light (cheap)
+    aux, delegate = _make_harness_fakes(triage_orchestrate=True)
+    res = run("find all security and logic bugs in this code", context="<short code>",
+              aux_call_fn=aux, delegate_fn=delegate, enable_ledger=False,
+              config=UltracodeConfig(verify_lenses=[VerifyLens.CORRECTNESS, VerifyLens.SECURITY, VerifyLens.REPRODUCES]))
+    assert res.mode == "discerned-light"
+    assert not any("discover(loop" in s for s in res.stages)
 
 
 def test_replan_for_gaps_returns_new_targeted_subtasks():

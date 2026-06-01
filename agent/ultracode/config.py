@@ -58,6 +58,7 @@ class UltracodeConfig:
     # -- scale-to-the-ask --
     solo_by_default: bool = True   # restraint: orchestrate only on a real signal
     discernment: bool = True       # DISCERNMENT: solo-first, escalate to orchestration only if a quick triage says it would materially help (the fix for "always full-metal")
+    full_orchestration_min_chars: int = 6000  # FULL (loop-until-dry) is reserved for genuinely large find-all work; smaller tasks that warrant orchestration get the cheap LIGHT ensemble
 
     # -- budget (token ceiling; None = no object, but still announced) --
     run_budget_tokens: Optional[int] = None

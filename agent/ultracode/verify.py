@@ -171,7 +171,14 @@ def verify_findings(
             finding.survived = confirms >= quorum
             finding.verdict = Verdict.CONFIRMED if finding.survived else Verdict.REFUTED
         else:  # "defend"
-            finding.survived = kills < quorum
+            # A finding (which carries its own evidence) survives unless its
+            # refutation is UNANIMOUS — every lens that voted refuted it WITH a
+            # mechanism. When the verifier itself is a weak model, a quorum can
+            # be wrong; requiring unanimity protects real bugs from a miscalibrated
+            # skeptic (recall priority) while still killing clear-cut spurious that
+            # every lens agrees on.
+            n_voting = len(votes)
+            finding.survived = not (n_voting >= 2 and kills >= n_voting)
             if not finding.survived:
                 finding.verdict = Verdict.REFUTED
             elif confirms >= 1:

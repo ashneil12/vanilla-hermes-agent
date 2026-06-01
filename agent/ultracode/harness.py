@@ -179,8 +179,12 @@ def run(
             led.event("triage", {"orchestrate": tv.orchestrate, "confidence": tv.confidence,
                                   "stakes": tv.stakes, "gaps": tv.gaps, "reason": tv.reason})
         seed_findings = solo_findings   # always build ON the solo pass (union -> recall)
-        light = not tv.orchestrate      # not full -> LIGHT ensemble (one finder wave, no loop)
-        pre_stages = ["solo-audit", "triage:" + ("light" if light else "escalate")]
+        # FULL (loop-until-dry) is reserved for genuinely large, unbounded find-all
+        # work; everything else that warrants orchestration gets the cheap LIGHT
+        # ensemble. This keeps small tasks at ~light cost instead of 80k-token loops.
+        go_full = bool(tv.orchestrate and decision.loop_until_dry and len(context) > cfg.full_orchestration_min_chars)
+        light = not go_full
+        pre_stages = ["solo-audit", "triage:" + ("full" if go_full else "light")]
 
     # --- plan (work-list before fan-out) -------------------------------------
     plan = make_plan(task, decision, context="", config=cfg, agent=agent, aux_call_fn=aux_call_fn, model=model)
