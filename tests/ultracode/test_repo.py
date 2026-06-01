@@ -114,6 +114,30 @@ def test_chunk_repo_prioritizes_security_files(tmp_path):
     assert not any("readme" in p for p in picked)  # alphabetical-first junk NOT picked
 
 
+def test_adjudication_drops_false_positives_keeps_real():
+    from agent.ultracode.adjudicate import adjudicate_findings
+    from agent.ultracode.schema import Finding, Verdict
+    real = Finding(claim="SQL injection via string-formatted query", locator="db.py:5", severity="critical")
+    real.survived = True
+    fp = Finding(claim="missing authorization on set_mode", locator="cli.py:9", severity="high")
+    fp.survived = True
+
+    def aux(**kwargs):
+        u = kwargs["messages"][1]["content"]
+        if "SQL" in u:  # traceable exploit, boundary crossed -> real
+            return json.dumps({"verdict": "real", "attacker": "web user", "exploit_path": "param->query",
+                               "guards_found": "none", "trust_boundary_crossed": True, "confidence": 0.9, "reasoning": "r"})
+        # local-only single principal -> no boundary -> false positive
+        return json.dumps({"verdict": "false_positive", "attacker": "none", "exploit_path": "none",
+                           "guards_found": "single local principal", "trust_boundary_crossed": False,
+                           "confidence": 0.9, "reasoning": "stdio local trust, no second actor"})
+
+    out = adjudicate_findings([real, fp], read_file_fn=lambda p: "the full file", aux_call_fn=aux)
+    assert out["kept_real"] == 1 and out["dropped_false_positive"] == 1
+    assert real.survived is True and real.verdict == Verdict.CONFIRMED
+    assert fp.survived is False and fp.verdict == Verdict.REFUTED  # the FP got dropped
+
+
 def test_repo_overview_summarizes(tmp_path):
     root = str(tmp_path)
     _write(root, "a/x.py", "\n".join(str(i) for i in range(50)))

@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional, Tuple
 
 from agent.ultracode.adapters import aux_call, delegate_fanout, extract_json, runtime_from_agent
+from agent.ultracode.adjudicate import adjudicate_findings
 from agent.ultracode.config import UltracodeConfig
 from agent.ultracode.schema import Finding, dedupe_findings, reconcile_findings
 from agent.ultracode.verify import survivors as _survivors, verify_findings
@@ -177,10 +178,13 @@ def audit_repo(
     task: str,
     *,
     delegate_fn: Optional[Callable[..., str]] = None,
+    aux_call_fn: Optional[Callable[..., Any]] = None,
     config: Optional[UltracodeConfig] = None,
     agent: Any = None,
     concurrency: int = 24,
     verify_severities: Tuple[str, ...] = ("critical", "high"),
+    adjudicate: bool = False,
+    root: str = "",
     progress: Optional[Callable[[str], None]] = None,
 ) -> RepoAuditResult:
     """Fan out one finder per chunk, aggregate, reconcile, and verify the
@@ -216,6 +220,21 @@ def audit_repo(
         res.survivors = [f for f in findings if (f.severity or "").lower() not in verify_severities or id(f) in kept]
     else:
         res.survivors = findings
+
+    # ACCURACY GATE: adjudicate load-bearing findings with FULL-file context +
+    # burden of proof (kills the cross-file-guard / threat-model false positives
+    # that a chunk-level finder/skeptic can't see). Best run on a STRONGER model.
+    if adjudicate and root:
+        def _read(p):
+            return open(os.path.join(root, p), encoding="utf-8", errors="replace").read()
+        if progress:
+            progress(f"adjudicating {len([f for f in res.survivors if (f.severity or '').lower() in ('critical','high','medium')])} findings with full-file context (burden of proof)")
+        adj = adjudicate_findings(res.survivors, _read, aux_call_fn=aux_call_fn, agent=agent)
+        res.survivors = [f for f in res.survivors if f.survived]
+        res.caps_announced.append(
+            f"adjudicated: {adj['kept_real']} REAL kept, {adj['dropped_false_positive']} false-positives dropped, "
+            f"{adj['needs_context']} need-context")
+
     res.findings = findings
     return res
 
