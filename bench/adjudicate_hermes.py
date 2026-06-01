@@ -47,14 +47,14 @@ def run(model):
         f = Finding(claim=claim, locator=loc, severity=sev)
         adj = adjudicate_finding(f, window(loc), aux_call_fn=c.aux_call_fn)
         v = adj.verdict
-        # map: real -> keep; false_positive/needs_context -> not asserted as real
-        agrees = (truth == "real" and v == "real") or (truth == "fp" and v != "real")
+        kept = v in ("real", "conditional")  # conditional = real-but-gated, still kept
+        agrees = (truth == "real" and kept) or (truth == "fp" and not kept)
         correct += agrees
         if truth == "fp":
-            fp_total += 1; fp_caught += (v != "real")
+            fp_total += 1; fp_caught += (not kept)
         else:
-            real_total += 1; real_kept += (v == "real")
-        print(f"  [{v:15}] truth={truth:4} {'OK ' if agrees else 'X  '} {loc}  bound={adj.trust_boundary_crossed}", flush=True)
+            real_total += 1; real_kept += kept
+        print(f"  [{v:15}] truth={truth:4} {'OK ' if agrees else 'X  '} {loc}  sev->{adj.true_severity or '?'}", flush=True)
     print(f"\n  accuracy={correct}/{len(F)}  FP-caught={fp_caught}/{fp_total}  real-kept={real_kept}/{real_total}  "
           f"| {c.usage.snapshot()['total_tokens']}tok", flush=True)
 

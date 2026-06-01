@@ -24,11 +24,13 @@ from agent.ultracode.schema import Finding, Verdict
 
 @dataclass
 class Adjudication:
-    verdict: str = "false_positive"   # real | false_positive | needs_context
+    verdict: str = "false_positive"   # real | conditional | false_positive | needs_context
     attacker: str = ""
     exploit_path: str = ""
     guards_found: str = ""
     trust_boundary_crossed: bool = False
+    true_severity: str = ""
+    precondition: str = ""
     confidence: float = 0.0
     reasoning: str = ""
 
@@ -43,8 +45,11 @@ _ADJ_SYSTEM = (
     "(4) TRUST BOUNDARY actually crossed — a single-principal local-only path (e.g. a stdio CLI/editor with "
     "no second actor) crosses no boundary, so 'missing authz' there is not a vulnerability. "
     "Most flagged patterns ('tainted input reaches a function', 'substring check', 'no None check') are NOT "
-    "exploitable once traced. Be ruthless and HONEST — if you cannot prove all four, say false_positive or "
-    "needs_context. Also correct the severity if the finding overstated it."
+    "exploitable once traced. Be ruthless and HONEST. IMPORTANT — three outcomes, not two: if the issue is "
+    "GENUINELY REAL but only exploitable under specific PRECONDITIONS (operator misconfig, a niche deploy) or "
+    "its severity was overstated, return 'conditional' and KEEP it (state the precondition + the corrected "
+    "severity) — do NOT discard a real-but-gated bug as false_positive. Use 'false_positive' only when there "
+    "is no real defect at all; 'needs_context' when you genuinely can't tell without code you can't see."
 )
 
 
@@ -62,11 +67,13 @@ def adjudicate_finding(
         f"EVIDENCE OFFERED: {finding.evidence or '(none)'}\n\n"
         f"FULL FILE (read it — the guards may be elsewhere in here):\n{file_text[:24000]}\n\n"
         "Adjudicate per the burden of proof.\n"
-        'Reply with ONLY JSON: {"verdict":"real|false_positive|needs_context", '
+        'Reply with ONLY JSON: {"verdict":"real|conditional|false_positive|needs_context", '
         '"attacker":"<who controls the input, or none>", '
         '"exploit_path":"<source->sink trace, or why none exists>", '
         '"guards_found":"<mitigations on the path, or none>", '
-        '"trust_boundary_crossed":true|false, "confidence":0.0-1.0, "reasoning":"<one-paragraph>"}'
+        '"trust_boundary_crossed":true|false, "true_severity":"critical|high|medium|low|info", '
+        '"precondition":"<for conditional: what must be true to exploit>", '
+        '"confidence":0.0-1.0, "reasoning":"<one-paragraph>"}'
     )
     try:
         text = aux_call(
@@ -80,13 +87,15 @@ def adjudicate_finding(
     if not isinstance(p, dict):
         return Adjudication(verdict="needs_context", reasoning="adjudicator reply unparseable")
     verdict = str(p.get("verdict", "false_positive")).strip().lower()
-    if verdict not in ("real", "false_positive", "needs_context"):
+    if verdict not in ("real", "conditional", "false_positive", "needs_context"):
         verdict = "needs_context"
     return Adjudication(
         verdict=verdict, attacker=str(p.get("attacker", "")).strip(),
         exploit_path=str(p.get("exploit_path", "")).strip(),
         guards_found=str(p.get("guards_found", "")).strip(),
         trust_boundary_crossed=bool(p.get("trust_boundary_crossed", False)),
+        true_severity=str(p.get("true_severity", "")).strip().lower(),
+        precondition=str(p.get("precondition", "")).strip(),
         confidence=float(p.get("confidence", 0.0) or 0.0),
         reasoning=str(p.get("reasoning", "")).strip(),
     )
@@ -103,7 +112,7 @@ def adjudicate_findings(
     proof. A finding SURVIVES only if verdict == 'real'. Returns counts. This is
     the accuracy gate — it converts a noisy candidate list into a defensible one.
     Best run on a STRONGER model than the finders (pass it via aux_call_fn)."""
-    kept = dropped = unsure = 0
+    kept = conditional = dropped = unsure = 0
     for f in findings:
         if (f.severity or "").lower() not in only_severities:
             continue
@@ -119,12 +128,20 @@ def adjudicate_findings(
             f.survived = True
             f.verdict = Verdict.CONFIRMED
             kept += 1
+        elif adj.verdict == "conditional":
+            # real but precondition-gated/overstated -> KEEP it, flagged, with corrected severity
+            f.survived = True
+            f.verdict = Verdict.PARTIAL
+            if adj.true_severity in ("critical", "high", "medium", "low", "info"):
+                f.severity = adj.true_severity
+            conditional += 1
         elif adj.verdict == "false_positive":
             f.survived = False
             f.verdict = Verdict.REFUTED
             dropped += 1
-        else:  # needs_context -> keep but flag low-confidence (don't assert, don't hide)
+        else:  # needs_context -> keep but flag (don't assert, don't hide)
             f.verdict = Verdict.PARTIAL
             unsure += 1
         f.validate()
-    return {"kept_real": kept, "dropped_false_positive": dropped, "needs_context": unsure}
+    return {"kept_real": kept, "conditional": conditional,
+            "dropped_false_positive": dropped, "needs_context": unsure}
