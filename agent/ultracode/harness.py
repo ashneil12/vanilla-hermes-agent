@@ -204,6 +204,27 @@ def run(
         led.event("decision", {"orchestrate": decision.orchestrate, "shape": decision.shape.value,
                                 "reason": decision.reason, "kind": tkind})
 
+    # --- EXECUTION as a reasoning aid -----------------------------------------
+    # For computable tasks (systematic search / enumeration / simulation / exact
+    # arithmetic), the agent WRITES and RUNS a program — the runtime computes reliably
+    # what a weak model's reasoning slips on (the single biggest cognitive lever).
+    # The agent DECLINES (NOT_COMPUTABLE) for pure-reasoning tasks, which fall through
+    # to the normal flow. A clean run is ground truth for the computable part.
+    if cfg.execution_assist:
+        from agent.ultracode.compute import computable_answer
+        comp = computable_answer(task, aux_call_fn=aux_call_fn, agent=agent, model=model)
+        if led:
+            led.event("compute", {"ran": comp.ran, "declined": comp.declined, "detail": comp.detail})
+        if comp.ran and comp.answer:
+            res = UltracodeResult(
+                task=task, mode="compute", answer=f"FINAL ANSWER: {comp.answer}", decision=decision,
+                stages=["compute(execution)"],
+                caps_announced=["solved by execution: the agent wrote and ran a program; "
+                                "its output is the computed answer (ground truth for the computable part)"])
+            if led:
+                led.event("done", res.summary())
+            return res
+
     # GENERATIVE tasks use the judge-panel shape (N angles -> score -> graft), not find->verify
     if tkind == TaskKind.GENERATIVE and (decision.orchestrate or force_orchestrate):
         jr = judge_panel(task, context=context, n=cfg.max_finders, delegate_fn=delegate_fn,

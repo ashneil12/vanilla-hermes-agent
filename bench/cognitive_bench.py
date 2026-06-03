@@ -95,13 +95,15 @@ def main():
     if not tasks:
         print("No tasks loaded — populate bench/cognitive_tasks.py first."); return
 
-    if mode == "ultracode":
-        cfg = UltracodeConfig(concurrency=12, max_children=8, max_finders=6)
+    if mode in ("ultracode", "ultracode_exec"):
+        exec_assist = mode == "ultracode_exec"
+        cfg = UltracodeConfig(concurrency=12, max_children=8, max_finders=6, execution_assist=exec_assist)
         res = run_ultracode(model, tasks, cfg)
-        (RESULTS / f"cog_ultracode_{model}.json").write_text(json.dumps(res, indent=1))
+        suffix = "_exec" if exec_assist else ""
+        (RESULTS / f"cog_ultracode{suffix}_{model}.json").write_text(json.dumps(res, indent=1))
         rows = [(t, res[t.id]["correct"]) for t in tasks]
         overall, per_cat = _agg(rows)
-        _print_table(f"ULTRACODE {model}", overall, per_cat)
+        _print_table(f"ULTRACODE{'+exec' if exec_assist else ''} {model}", overall, per_cat)
 
     elif mode == "baseline":
         res = run_baseline(model, tasks)
