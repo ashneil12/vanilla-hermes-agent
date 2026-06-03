@@ -47,26 +47,33 @@ customizations:
     note: "If upstream reorders main.tsx imports, just keep our import line present."
 
   - id: webchat-serve
-    status: static-via-provisioner   # NOT baked into the image — see decision below
+    status: live-multistage-bake     # baked LIGHT via a throwaway builder stage
     files:
+      - path: Dockerfile
+        ownership: block            # webchat_build builder stage + COPY --from of the dist only
+        on_conflict: merge-careful
       - path: hermes_cli/web_server.py
-        ownership: block            # mount_webchat — kept but DORMANT (no-op unless a webchat_dist exists)
+        ownership: block            # mount_webchat serves /webchat from the baked dist
+        on_conflict: keep-ours
+      - path: pyproject.toml
+        ownership: one-line         # webchat_dist/**/* in package-data
         on_conflict: keep-ours
     decision: >
-      Do NOT bake the rich-chat bundle into the agent Docker image. Baking it
-      added ~1GB (apps/* node_modules + a C++ toolchain for node-pty), and
-      in-place `compose pull + up -d` of that heavier image WEDGED a live VM
-      (unkillable qemu → host reboot). Since the fleet updates in-place, the
-      agent image MUST stay light. Instead the rich chat ships as STATIC files
-      (it's just HTML/JS/CSS) served by the per-instance Caddy from a bundle the
-      provisioner drops on each instance — the durable form of the canary
-      hand-deploy. Decouples chat-UI updates from the heavy agent image.
-    serves: "GET /webchat (+ /webchat/assets/*) — Caddy file_server, static bundle"
+      First attempt baked the bundle in the SAME image layer as its build deps —
+      that added ~1GB (apps/* node_modules + node-pty C++ toolchain), and the
+      in-place roll of the heavier image WEDGED a live VM (→ host reboot). FIX:
+      MULTI-STAGE — a throwaway `webchat_build` stage (full node image, has the
+      toolchain) produces the static dist; the runtime COPYs ONLY the ~21MB dist.
+      Runtime grows ~21MB, not ~1GB → in-place fleet rolls stay light. Bundle
+      travels with the agent image (no separate asset pipeline); web_server.py's
+      mount_webchat serves it at /webchat.
+    serves: "GET /webchat (+ /webchat/assets/*) — mount_webchat from the baked dist"
     follow_up: >
-      Provisioner (Phase 2b, control-plane): ship the /webchat (+ /dash) static
-      bundle + Caddy routes into the per-instance template; retire the manual
-      hand-deploy + the systemd route-guard. mount_webchat in web_server.py stays
-      dormant (harmless) in case a future image ever ships a webchat_dist.
+      Provisioner cutover (control-plane, hermesdeploy-canary → prod): in
+      webui-instance-builder.ts drop the `webui:` service and route Caddy `/` to
+      the rich chat; keep gateway + official-dashboard. Canary-first, then prod
+      per the autonomy guardrails. Verify the rebuilt image stays LIGHT before
+      any in-place roll.
 
   - id: hermesos-brand-skin
     status: planned

@@ -7,6 +7,20 @@ FROM ghcr.io/astral-sh/uv:0.11.6-python3.13-trixie@sha256:b3c543b6c4f23a5f2df228
 # our Debian 13 (trixie, glibc 2.41) runtime.  Bumping to a new Node major
 # is a one-line ARG change; see #4977.
 FROM node:22-bookworm-slim@sha256:7af03b14a13c8cdd38e45058fd957bf00a72bbe17feac43b1c15a689c029c732 AS node_source
+
+# ── HermesOS web rich-chat bundle (throwaway builder stage) ─────────────────
+# Builds apps/desktop into the static /webchat bundle. The full node:22-bookworm
+# image carries the build-essential + python toolchain node-pty needs. Only the
+# ~21MB static dist is copied into the runtime below — none of the ~1GB of
+# node_modules / toolchain reaches the shipped image, so in-place fleet rolls
+# stay light (this is what fixes the heavy-image VM wedge).
+FROM node:22-bookworm AS webchat_build
+WORKDIR /build
+COPY . .
+RUN npm install --no-audit --no-fund \
+ && cd apps/desktop \
+ && npx vite build --base=/webchat/ --outDir /webchat_dist --emptyOutDir
+
 FROM debian:13.4
 
 # Disable Python stdout buffering to ensure logs are printed immediately
@@ -180,6 +194,10 @@ COPY --chown=hermes:hermes . .
 # Build browser dashboard and terminal UI assets.
 RUN cd web && npm run build && \
     cd ../ui-tui && npm run build
+# HermesOS: drop in the prebuilt rich-chat bundle from the throwaway builder
+# stage (static files only — no node_modules/toolchain). web_server.py's
+# mount_webchat serves it at /webchat.
+COPY --chown=hermes:hermes --from=webchat_build /webchat_dist /opt/hermes/hermes_cli/webchat_dist
 
 # ---------- Permissions ----------
 # Make install dir world-readable so any HERMES_UID can read it at runtime.
