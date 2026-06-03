@@ -74,10 +74,14 @@ only **one part** of multi-part questions (the XOR config without the count; one
 
 **The lesson (the real finding):** naive *short-circuit-to-compute* is wrong — execution should **augment**
 reasoning, not **replace** it, and must decline explain/identify tasks and emit *complete* multi-part output.
-A v2 prompt (decline EXPLAIN/IDENTIFY/JUSTIFY; print every part) addresses both failure modes. `execution_assist`
-stays **off by default**, so the shipping harness is the 0.917 config; execution is an opt-in lever that pays
-off only on genuinely pure-compute work. (Next: compute-as-evidence-feeding-synthesis, so the number lands in
-the answer without the explanation being lost.)
+A **v2** prompt (decline EXPLAIN/IDENTIFY/JUSTIFY; print every part) **fixed both failure modes** — verified:
+the XOR task now prints config *and* count; the 3-type knights puzzle now correctly *declines* compute and
+reasons all three types; the find-the-bug task declines compute. Compute-mode use dropped 58→38 (the agent
+now picks it more appropriately). But on this MIXED bank (mostly non-pure-compute) execution is still ~net
+neutral — it's a real lever **only where the answer is genuinely a computed value**. So `execution_assist`
+stays **off by default**: the shipping harness is the **0.917** config, and execution is an opt-in lever for
+compute-heavy work (where the isolated test showed 9/10). On a search/enumeration-heavy benchmark it would
+shine; on broad reasoning it's a wash.
 
 ## On grading the reasoning *process*, not just the answer
 
