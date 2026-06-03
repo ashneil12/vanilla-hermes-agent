@@ -53,14 +53,21 @@ customizations:
     on_conflict: keep-ours
 
   - id: health-egress
-    status: planned
+    status: ported            # agent plugin written; pending canary-build verification + cron repoint
     source_in_webui: "api/health_egress.py  (route: GET /api/health/egress)"
+    ours_files:
+      - plugins/hermes-egress/dashboard/plugin_api.py    # probe + router (whole file, ours)
+      - plugins/hermes-egress/dashboard/manifest.json
+    serves: "GET /api/plugins/hermes-egress/check?targets=...  (same wire shape as the webui original)"
     intent: >
       Synthetic outbound DNS/TCP egress probe. LOAD-BEARING: the Hermesdeploy
-      fleet egress-sweep cron GETs it on every VM. Must exist before webui is
-      dropped.
+      fleet egress-sweep cron hits it on every VM to catch VMs that lost egress
+      while /api/health stays green.
     on_conflict: keep-ours
-    port_as: "New additive module + a dashboard route. Do not edit upstream networking code."
+    follow_up: >
+      Control-plane PR: repoint dashboard/src/lib/instance-egress-sweep.ts from
+      /api/health/egress to /api/plugins/hermes-egress/check and send the
+      per-instance token. Verify the plugin mounts on a canary image build.
 
   - id: venice-managed-key-fallback
     status: planned
