@@ -77,11 +77,26 @@ reasoning, not **replace** it, and must decline explain/identify tasks and emit 
 A **v2** prompt (decline EXPLAIN/IDENTIFY/JUSTIFY; print every part) **fixed both failure modes** — verified:
 the XOR task now prints config *and* count; the 3-type knights puzzle now correctly *declines* compute and
 reasons all three types; the find-the-bug task declines compute. Compute-mode use dropped 58→38 (the agent
-now picks it more appropriately). But on this MIXED bank (mostly non-pure-compute) execution is still ~net
-neutral — it's a real lever **only where the answer is genuinely a computed value**. So `execution_assist`
-stays **off by default**: the shipping harness is the **0.917** config, and execution is an opt-in lever for
-compute-heavy work (where the isolated test showed 9/10). On a search/enumeration-heavy benchmark it would
-shine; on broad reasoning it's a wash.
+now picks it more appropriately). But v1/v2 still *short-circuited* to the program's output, capping
+the gain. **v3 — compute-as-EVIDENCE — is the design that wins.**
+
+### v3: execution as evidence, not replacement (the win)
+Instead of returning the program's output as the answer, v3 **folds the computed value into the material as
+authoritative evidence** and lets the normal reasoning flow produce the COMPLETE answer + explanation (and
+override an obviously-wrong computation). This captures the compute wins with **no** downside:
+
+| config | fair score | vs Opus |
+|---|---|---|
+| non-exec ultracode (conservative shipping default) | 100/109 = 0.917 | 91.7 % |
+| exec v1 (short-circuit-to-compute) | 0.908 | wash |
+| **exec v3 (compute-as-evidence)** | **105/109 = 0.963** | **96.3 %** |
+
+v3 lifts `lateral_insight` 10→**12/12** (the binary-multiple and jug-search tasks flash can't reason are now
+solved by the folded-in computed value), `constraint_planning` to **12/12** (the constrained knapsack), and
+`causal_counterfactual` to **12/12** — while losing nothing, because compute only ever *augments*. The 4
+remaining misses are genuinely-hard non-compute reasoning. **`execution_assist` stays off by default** (it
+runs model-generated code — same safety posture as `execution_verify`), but **with it on, ultracode-flash
+reaches 96.3 % of Opus** — it's the recommended config wherever code execution is safe (sandbox/trusted).
 
 ## On grading the reasoning *process*, not just the answer
 
