@@ -13,6 +13,7 @@ accuracy and the headline RATIO  ultracode-flash / opus-baseline  (target 0.70-0
 import json
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -42,37 +43,41 @@ def _agg(rows):
     return overall, {k: (v[0] / v[1], v[1]) for k, v in by_cat.items()}
 
 
-def run_ultracode(model, tasks, cfg):
-    out = {}
-    for i, t in enumerate(tasks):
+def _parallel(tasks, fn, task_workers, label):
+    """Run fn(task)->dict over tasks with a task-level pool; print as each completes."""
+    out, done = {}, 0
+    with ThreadPoolExecutor(max_workers=task_workers) as ex:
+        futs = {ex.submit(fn, t): t for t in tasks}
+        for f in as_completed(futs):
+            t = futs[f]
+            try:
+                out[t.id] = f.result()
+            except Exception as exc:
+                out[t.id] = {"answer": f"(error: {exc})", "correct": False}
+            done += 1
+            print(f"  [{done}/{len(tasks)}] {'OK ' if out[t.id].get('correct') else 'XX '} {label} {t.id:42}", flush=True)
+    return out
+
+
+def run_ultracode(model, tasks, cfg, task_workers=5):
+    def one(t):
         cu = DeepSeekClient(model=model, max_workers=12)
-        t0 = time.time()
-        try:
-            res = run(t.prompt + ANSWER_DIRECTIVE, delegate_fn=cu.delegate_fn, aux_call_fn=cu.aux_call_fn,
-                      config=cfg, enable_ledger=False, run_id=t.id)
-            ans = res.answer or ""
-        except Exception as exc:
-            ans = f"(error: {exc})"
-        ok = is_correct(ans, t)
-        out[t.id] = {"answer": ans, "correct": ok, "tokens": cu.usage.snapshot()["total_tokens"]}
-        print(f"  [{i+1}/{len(tasks)}] {'OK ' if ok else 'XX '} {t.id:42} ({time.time()-t0:.0f}s)", flush=True)
-    return out
+        res = run(t.prompt + ANSWER_DIRECTIVE, delegate_fn=cu.delegate_fn, aux_call_fn=cu.aux_call_fn,
+                  config=cfg, enable_ledger=False, run_id=t.id)
+        ans = res.answer or ""
+        return {"answer": ans, "correct": is_correct(ans, t), "mode": res.mode,
+                "tokens": cu.usage.snapshot()["total_tokens"]}
+    return _parallel(tasks, one, task_workers, "ULTRA")
 
 
-def run_baseline(model, tasks):
-    out = {}
-    for i, t in enumerate(tasks):
+def run_baseline(model, tasks, task_workers=10):
+    def one(t):
         cb = DeepSeekClient(model=model, max_workers=4)
-        try:
-            o = cb.chat([{"role": "system", "content": "Solve the problem with careful step-by-step reasoning."},
-                         {"role": "user", "content": t.prompt + ANSWER_DIRECTIVE}], temperature=0.3, max_tokens=4000)
-            ans = type(cb)._content(o) or ""
-        except Exception as exc:
-            ans = f"(error: {exc})"
-        ok = is_correct(ans, t)
-        out[t.id] = {"answer": ans, "correct": ok}
-        print(f"  [{i+1}/{len(tasks)}] {'OK ' if ok else 'XX '} {t.id:42}", flush=True)
-    return out
+        o = cb.chat([{"role": "system", "content": "Solve the problem with careful step-by-step reasoning."},
+                     {"role": "user", "content": t.prompt + ANSWER_DIRECTIVE}], temperature=0.3, max_tokens=4000)
+        ans = type(cb)._content(o) or ""
+        return {"answer": ans, "correct": is_correct(ans, t)}
+    return _parallel(tasks, one, task_workers, "BASE ")
 
 
 def _print_table(title, overall, per_cat):
