@@ -46,11 +46,16 @@ def test_resolve_targets_enforces_allowlist():
     assert mod._resolve_targets("   ,, ") == list(mod._DEFAULT_TARGETS)
 
 
-def test_probe_failure_reported_in_band():
+def test_probe_failure_reported_in_band(monkeypatch):
     mod = _load_module()
-    # The .invalid TLD is guaranteed NXDOMAIN (RFC 6761): a DNS failure that
-    # must be reported in-band (ok=False) rather than raising.
-    result = mod._probe_one_target("nonexistent.invalid")
-    assert result["target"] == "nonexistent.invalid"
+    import socket as _socket
+
+    def _boom(*_a, **_k):
+        raise _socket.gaierror("Name or service not known")
+
+    # Force a DNS failure deterministically — no real network in the test.
+    monkeypatch.setattr(mod.socket, "getaddrinfo", _boom)
+    result = mod._probe_one_target("api.openai.com")
     assert result["ok"] is False
-    assert "errorClass" in result and "durationMs" in result
+    assert result["errorClass"] == "gaierror"
+    assert "durationMs" in result

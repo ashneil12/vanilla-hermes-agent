@@ -55,6 +55,10 @@ _PER_TARGET_TIMEOUT_S: float = 2.5
 # The dashboard sweep aborts the whole HTTP request at 8s; parallel probing
 # keeps wall-clock at ~_PER_TARGET_TIMEOUT_S even with several targets.
 _MAX_PARALLEL_PROBES: int = 4
+# Hard ceiling on the whole endpoint even if a probe's getaddrinfo hangs — the
+# DNS-outage case this probe exists to detect (getaddrinfo takes no timeout
+# arg). Kept under the dashboard sweep's 8s request abort.
+_OVERALL_TIMEOUT_S: float = 6.0
 
 
 def _probe_one_target(target: str) -> dict:
@@ -103,13 +107,35 @@ def _resolve_targets(raw: str) -> list[str]:
 
 @router.get("/check")
 def egress_check(targets: str = Query(default="")) -> dict:
-    """Probe outbound reachability to the allowed model-API hosts."""
+    """Probe outbound reachability to the allowed model-API hosts.
+
+    Always returns within ~``_OVERALL_TIMEOUT_S`` even if a probe's DNS
+    resolution hangs: any target that hasn't finished by the deadline is
+    reported as a ``timeout`` failure rather than blocking the endpoint (which
+    would defeat the whole point during a DNS outage).
+    """
     to_probe = _resolve_targets(targets)
     results: list[dict] = []
-    with ThreadPoolExecutor(max_workers=_MAX_PARALLEL_PROBES) as pool:
-        futures = {pool.submit(_probe_one_target, t): t for t in to_probe}
-        for fut in as_completed(futures):
+    pool = ThreadPoolExecutor(max_workers=_MAX_PARALLEL_PROBES)
+    futures = {pool.submit(_probe_one_target, t): t for t in to_probe}
+    try:
+        for fut in as_completed(futures, timeout=_OVERALL_TIMEOUT_S):
             results.append(fut.result())
+    except TimeoutError:
+        done = {r["target"] for r in results}
+        for _fut, target in futures.items():
+            if target not in done:
+                results.append({
+                    "target": target,
+                    "ok": False,
+                    "errorClass": "timeout",
+                    "errorDetail": f"probe exceeded {_OVERALL_TIMEOUT_S}s",
+                    "durationMs": int(_OVERALL_TIMEOUT_S * 1000),
+                })
+    finally:
+        # Don't wait on a wedged getaddrinfo thread; let it leak and reap itself
+        # when the resolver finally errors out.
+        pool.shutdown(wait=False, cancel_futures=True)
     # Stable order = request order, so the consumer can rely on it.
     order = {t: i for i, t in enumerate(to_probe)}
     results.sort(key=lambda r: order.get(r["target"], 1_000))
