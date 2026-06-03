@@ -45,6 +45,7 @@ ACP_REGISTRY_MANIFEST = REPO_ROOT / "acp_registry" / "agent.json"
 
 # Auto-extracted from noreply emails + manual overrides
 AUTHOR_MAP = {
+<<<<<<< HEAD
     # hermes-fork: salvage-commit author email variants surfaced by the
     # 2026-05-23 upstream sync (check-attribution flagged these).
     "ethie@nous": "ethernet8023",
@@ -65,6 +66,7 @@ AUTHOR_MAP = {
     "alaamohanad169@gmail.com": "Spider-Vers",
     "info@aminvakil.com": "aminvakil",
     "nikpolale@gmail.com": "polnikale",
+    "liliangjya@gmail.com": "truenorth-lj",
     "ben.bartholomew@vectorize.io": "benfrank241",
     "74339271+SaguaroDev@users.noreply.github.com": "SaguaroDev",
     "subw3@mail2.sysu.edu.cn": "Subway2023",
@@ -405,6 +407,7 @@ AUTHOR_MAP = {
     "harish.kukreja@gmail.com": "counterposition",
     "nidhi2894@gmail.com": "nidhi-singh02",
     "35294173+Fearvox@users.noreply.github.com": "Fearvox",
+    "fearvox1015@gmail.com": "Fearvox",
     "hypnus.yuan@gmail.com": "Hypnus-Yuan",
     "15558128926@qq.com": "xsfX20",
     "binhnt.ht.92@gmail.com": "binhnt92",
@@ -1456,6 +1459,7 @@ AUTHOR_MAP = {
     "2663402852@qq.com": "x1am1",  # PR #35098 (chown root-owned top-level HERMES_HOME state files)
     "nicsequenzy@gmail.com": "polnikale",  # PR #35717 (discover Playwright headless_shell browser)
     "wasdhkzk@gmail.com": "whyhkzk",  # PR #32407 (sandbox-mirror inner-container guard; commits authored as whyhkzk + zhukun)
+    "leonard@sellem.me": "leonardsellem",  # PR #37405 (desktop WS origin guard on remote/Tailscale binds)
 }
 
 
