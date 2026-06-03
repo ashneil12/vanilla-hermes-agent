@@ -69,6 +69,23 @@ def clean_env(monkeypatch):
     monkeypatch.delenv("HERMES_LOCAL_STT_LANGUAGE", raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _neutralize_stt_lazy_install(monkeypatch):
+    """Force runtime faster-whisper lazy-install off for provider-selection tests.
+
+    Upstream added ``_try_lazy_install_stt`` (called from ``_get_provider`` and
+    ``_transcribe_local``). These tests mock ``_HAS_FASTER_WHISPER=False`` to
+    simulate "no local backend", but lazy-install re-checks importability via
+    ``find_spec`` and would see the really-installed faster-whisper on a dev
+    machine — masking the provider-selection / not-installed logic under test.
+    Pin it to False so the intended path runs; a test that specifically needs
+    the install path can re-patch it.
+    """
+    monkeypatch.setattr(
+        "tools.transcription_tools._try_lazy_install_stt", lambda: False, raising=True
+    )
+
+
 # ============================================================================
 # _get_provider — full permutation matrix
 # ============================================================================

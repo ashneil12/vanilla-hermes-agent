@@ -17618,6 +17618,23 @@ class GatewayRunner:
                     "run_agent resolved: model=%s provider=%s session=%s",
                     model, runtime_kwargs.get("provider"), session_key or "",
                 )
+                # Defense-in-depth: if the per-turn .env reload above raced a
+                # dashboard env rewrite, the resolved key can be momentarily
+                # absent. For a public/key-requiring host, reload + re-resolve so
+                # a transient empty key never reaches the wire as
+                # `Bearer no-key-required` (which 401s on the managed proxy).
+                try:
+                    from hermes_cli.runtime_provider import (
+                        reresolve_key_if_unusable_for_public_host as _reresolve_key,
+                    )
+                    runtime_kwargs["api_key"] = _reresolve_key(
+                        runtime_kwargs.get("api_key"),
+                        runtime_kwargs.get("base_url"),
+                        requested_provider=runtime_kwargs.get("provider"),
+                        env_reloader=_reload_runtime_env_preserving_config_authority,
+                    )
+                except Exception:
+                    logger.debug("per-turn key re-resolution skipped", exc_info=True)
             except Exception as exc:
                 return {
                     "final_response": f"⚠️ Provider authentication failed: {exc}",

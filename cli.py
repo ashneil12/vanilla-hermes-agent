@@ -4906,8 +4906,32 @@ class HermesCLI:
         """
         from hermes_cli.models import resolve_fast_mode_overrides
 
+        # Defense-in-depth: self.api_key can be poisoned with the `no-key-required`
+        # sentinel via a model-switch direct-alias resolution (model_switch sets
+        # api_key="no-key-required" then `self.api_key = result.api_key`), or be
+        # momentarily absent if a per-turn .env reload lands while the dashboard is
+        # rewriting that file. For a public/key-requiring host, reload the env and
+        # re-resolve so a transient empty key never goes out as
+        # `Bearer no-key-required` (which 401s and looks like a permanent failure).
+        _eff_key = self.api_key
+        try:
+            from hermes_cli.runtime_provider import (
+                reresolve_key_if_unusable_for_public_host as _reresolve_key,
+            )
+            try:
+                from hermes_cli.config import reload_env as _reload_env
+            except Exception:
+                _reload_env = None
+            _eff_key = _reresolve_key(
+                self.api_key,
+                self.base_url,
+                requested_provider=self.requested_provider,
+                env_reloader=_reload_env,
+            )
+        except Exception:
+            _eff_key = self.api_key
         runtime = {
-            "api_key": self.api_key,
+            "api_key": _eff_key,
             "base_url": self.base_url,
             "provider": self.provider,
             "api_mode": self.api_mode,

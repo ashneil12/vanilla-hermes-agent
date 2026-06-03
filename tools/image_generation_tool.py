@@ -1109,6 +1109,21 @@ def _dispatch_to_plugin_provider(prompt: str, aspect_ratio: str):
     return json.dumps(result)
 
 
+def _reference_edit_aspect_ratio(aspect_ratio: str) -> str:
+    """Convert image_generate's friendly aspect names to Venice edit enums.
+
+    ``image_generate`` exposes ``landscape|square|portrait`` to the model, but
+    Venice's edit/multi-edit endpoints accept concrete ratio strings. Passing
+    ``landscape`` through causes the edit endpoint to reject the request.
+    """
+    value = (aspect_ratio or "auto").strip()
+    return {
+        "landscape": "16:9",
+        "square": "1:1",
+        "portrait": "9:16",
+    }.get(value.lower(), value or "auto")
+
+
 def _handle_image_generate(args, **kw):
     prompt = args.get("prompt", "")
     if not prompt:
@@ -1132,9 +1147,10 @@ def _handle_image_generate(args, **kw):
                 from tools.image_edit_tool import image_edit_tool, image_compose_tool
             except Exception as exc:  # pragma: no cover - import guard
                 return tool_error(f"reference-image generation unavailable: {exc}")
+            edit_aspect_ratio = _reference_edit_aspect_ratio(aspect_ratio)
             if len(clean) == 1:
-                return image_edit_tool(image=clean[0], prompt=prompt, aspect_ratio=aspect_ratio)
-            return image_compose_tool(images=clean[:3], prompt=prompt, aspect_ratio=aspect_ratio)
+                return image_edit_tool(image=clean[0], prompt=prompt, aspect_ratio=edit_aspect_ratio)
+            return image_compose_tool(images=clean[:3], prompt=prompt, aspect_ratio=edit_aspect_ratio)
 
     # Route to a plugin-registered provider if one is active (and it's
     # not the in-tree FAL path).
