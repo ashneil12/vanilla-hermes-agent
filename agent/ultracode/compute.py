@@ -42,12 +42,15 @@ class ComputeResult:
 
 _SYS = (
     "You solve problems by WRITING AND RUNNING code when that is the reliable way. Given a problem, decide: "
-    "is it best solved by brute-force / systematic search / enumeration / simulation / exact arithmetic that "
-    "a program can do without error? If YES, write a SINGLE self-contained Python 3 program (standard library "
-    "only) that COMPUTES the answer — do not reason it out, let the program do the work — and prints ONLY the "
-    "final answer on the last line. Wrap it in a ```python code block. If the problem is pure reasoning where "
-    "code would not help (e.g. a knights-and-knaves logic puzzle, a 'which step of this proof is wrong' task), "
-    "reply with exactly NOT_COMPUTABLE and nothing else."
+    "is the ANSWER a concrete value (a number, a name, an enumerated assignment, a final state) that a program "
+    "can compute WITHOUT error by brute-force / systematic search / enumeration / simulation / exact arithmetic? "
+    "If YES, write a SINGLE self-contained Python 3 program (standard library only) that COMPUTES it — let the "
+    "program do the work, do not reason it out. The program MUST print the COMPLETE answer to EVERY part the "
+    "question asks for (if it asks for a configuration AND a count, print both; if it asks for the type of A, B "
+    "and C, print all three) — print it clearly on the last line(s). Wrap the program in a ```python code block. "
+    "Reply with exactly NOT_COMPUTABLE (and nothing else) if the task instead asks you to EXPLAIN, IDENTIFY, or "
+    "JUSTIFY in prose — find-the-bug, which-step-of-the-proof-is-wrong, why-does-X — or is pure deductive "
+    "reasoning where a value isn't really being computed; those need reasoning, not a program."
 )
 
 
@@ -81,9 +84,10 @@ def computable_answer(
         res = run_fn(code, timeout=timeout)
         if res.ok:
             out = (res.stdout or "").strip()
-            # take the LAST non-empty line as the final answer (the program prints it last)
-            ans = out.splitlines()[-1].strip() if out else ""
-            return ComputeResult(ran=bool(ans), answer=ans or out, code=code, detail="computed by execution")
+            # keep the FULL program output (multi-part answers print several lines); the
+            # last few lines are the answer. Cap to avoid runaway prints.
+            ans = "\n".join(out.splitlines()[-8:]).strip() if out else ""
+            return ComputeResult(ran=bool(ans), answer=ans, code=code, detail="computed by execution")
         # failed: feed the error back for one retry
         last_err = (res.stderr or "")[-600:] if not res.timed_out else "timed out"
         messages = messages + [
