@@ -58,4 +58,31 @@ synthesized answers, which the judge corrected.)
 
 **Honest caveat:** reasoning quality is genetics; the harness narrows the gap (structure, verification,
 not-leaving-blanks), it doesn't replace model intelligence. 91.7 % is the ceiling of what *this* harness
-extracts from flash on these tasks today — the execution and self-consistency levers target the rest.
+extracts from flash on these tasks today.
+
+## Execution as a reasoning aid — a wash (an honest negative result)
+
+The 9 remaining failures clustered on search/compute. An isolated test confirmed the lever works:
+letting flash WRITE+RUN a program solved **9/10** of those (it wrote a BFS and found the 12-digit binary
+multiple of 2026, computed the constrained knapsack = 90, the min jug-pours = 10). So I wired `compute.py`
+into the harness (`execution_assist`): the agent writes+runs code for computable tasks, declines for the rest.
+
+**But on the full bank it was a WASH: 0.908, actually −1 vs the 0.917 non-exec.** It *won* the pure-compute
+tasks (knapsack solved, deductive enumeration 11→12) but *lost* an equal amount where the agent **misapplied**
+compute — it computed a value for a find-the-**bug** task ("[[2,4]]" instead of naming the defect), and printed
+only **one part** of multi-part questions (the XOR config without the count; one knight's type out of three).
+
+**The lesson (the real finding):** naive *short-circuit-to-compute* is wrong — execution should **augment**
+reasoning, not **replace** it, and must decline explain/identify tasks and emit *complete* multi-part output.
+A v2 prompt (decline EXPLAIN/IDENTIFY/JUSTIFY; print every part) addresses both failure modes. `execution_assist`
+stays **off by default**, so the shipping harness is the 0.917 config; execution is an opt-in lever that pays
+off only on genuinely pure-compute work. (Next: compute-as-evidence-feeding-synthesis, so the number lands in
+the answer without the explanation being lost.)
+
+## On grading the reasoning *process*, not just the answer
+
+The LLM judge scores **substance**, not keyword overlap — for find-the-bug / which-step-is-wrong it required
+naming the same essential defect/step, and for multi-part it required completeness (catching the compute-mode
+partial answers above). For compute-mode answers the "reasoning" *is* the program — verifiable by construction.
+For the subjective benchmark (next), where there's no single answer, the **process** is graded directly: the
+judge-panel trace (the N candidate angles → critique → graft) is what's evaluated, not just the final text.
