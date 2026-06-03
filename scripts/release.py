@@ -56,6 +56,11 @@ AUTHOR_MAP = {
     "mathijs.vd.hurk@gmail.com": "mathijsvandenhurk",
     "redpiggy-cyber@users.noreply.github.com": "redpiggy-cyber",  # 2026-05-30 sync
     "ashneil12@users.noreply.github.com": "ashneil12",  # fork maintainer merge-commit identity
+    "160464144+ashneil12@users.noreply.github.com": "ashneil12",
+    "ashjeff33@gmail.com": "ashneil12",
+    "ops@hermesos.cloud": "ashneil12",
+    "41898282+github-actions[bot]@users.noreply.github.com": "github-actions[bot]",
+    "vinoth12940@users.noreply.github.com": "vinoth12940",
     # hermes-fork: 2026-06-03 prod upstream sync — authors flagged by check-attribution
     "25426917+Foldblade@users.noreply.github.com": "Foldblade",
     "34756395+donovan-yohan@users.noreply.github.com": "donovan-yohan",
@@ -65,6 +70,7 @@ AUTHOR_MAP = {
     "alaamohanad169@gmail.com": "Spider-Vers",
     "info@aminvakil.com": "aminvakil",
     "nikpolale@gmail.com": "polnikale",
+    "liliangjya@gmail.com": "truenorth-lj",
     "ben.bartholomew@vectorize.io": "benfrank241",
     "74339271+SaguaroDev@users.noreply.github.com": "SaguaroDev",
     "subw3@mail2.sysu.edu.cn": "Subway2023",
@@ -405,6 +411,7 @@ AUTHOR_MAP = {
     "harish.kukreja@gmail.com": "counterposition",
     "nidhi2894@gmail.com": "nidhi-singh02",
     "35294173+Fearvox@users.noreply.github.com": "Fearvox",
+    "fearvox1015@gmail.com": "Fearvox",
     "hypnus.yuan@gmail.com": "Hypnus-Yuan",
     "15558128926@qq.com": "xsfX20",
     "binhnt.ht.92@gmail.com": "binhnt92",
@@ -1456,6 +1463,7 @@ AUTHOR_MAP = {
     "2663402852@qq.com": "x1am1",  # PR #35098 (chown root-owned top-level HERMES_HOME state files)
     "nicsequenzy@gmail.com": "polnikale",  # PR #35717 (discover Playwright headless_shell browser)
     "wasdhkzk@gmail.com": "whyhkzk",  # PR #32407 (sandbox-mirror inner-container guard; commits authored as whyhkzk + zhukun)
+    "leonard@sellem.me": "leonardsellem",  # PR #37405 (desktop WS origin guard on remote/Tailscale binds)
 }
 
 
