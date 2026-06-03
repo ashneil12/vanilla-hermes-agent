@@ -64,11 +64,25 @@ customizations:
 
   - id: venice-managed-key-fallback
     status: planned
-    source_in_webui: "streaming/request resolver patch (managed Venice key injection)"
-    intent: "When a chat uses a Venice model and the user set no key, inject the managed HermesOS key."
+    source_in_webui: "api/streaming.py :: _resolve_managed_venice_custom_api_key (called at the 3 request-dispatch sites)"
+    intent: >
+      HermesOS runs a MANAGED Venice proxy so users get Venice models without
+      their own key (billed server-side). That endpoint is OpenAI-compatible, so
+      it travels the generic `custom` provider path — which assumes custom
+      endpoints may be keyless and stamps the placeholder `no-key-required`.
+      Managed Venice is NOT keyless, so without this it 401s. The fallback: when
+      provider==custom AND base_url contains the managed-venice marker AND the
+      resolved key is still the keyless placeholder, substitute the real
+      per-instance managed key from the container env. A user-supplied key is
+      never overridden.
+    trigger:
+      provider: custom
+      base_url_contains: "hermesos.cloud/api/managed-venice"   # also bare venice.ai → provider 'venice'
+      key_is_placeholder: ["no-key-required", "<_KEYLESS_CUSTOM_API_KEY>"]
+    injected_key_env_order: ["OPENAI_API_KEY", "VENICE_API_KEY"]   # per-instance managed key
     on_conflict: merge-careful
-    verify_test: "a Venice chat with no user key still resolves a key end-to-end"
-    note: "HIGHEST merge risk — sits on the request/streaming path. Re-verify after ANY upstream change to model/provider/key resolution."
+    verify_test: "a managed-Venice chat with no user key resolves a key end-to-end (not no-key-required)"
+    note: "HIGHEST merge risk — a hook INSIDE upstream's per-request key resolver, not a standalone file. Re-insert in the agent's provider/key resolver; re-verify after ANY upstream change to custom-provider key resolution."
 
   - id: aeon-delegation-panel
     status: planned
