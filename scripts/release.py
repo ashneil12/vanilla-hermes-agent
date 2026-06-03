@@ -62,6 +62,9 @@ AUTHOR_MAP = {
     "subw3@mail2.sysu.edu.cn": "Subway2023",
     "trevin@trevinchow.com": "tmchow",
     "david.gutowsky@gmail.com": "davidgut1982",
+    "alaamohanad169@gmail.com": "alaamohanad169-ship-it",  # 2026-06-03 sync
+    "info@aminvakil.com": "aminvakil",  # 2026-06-03 sync
+    "nikpolale@gmail.com": "polnikale",  # 2026-06-03 sync
     "drpelagik@gmail.com": "SeaXen",
     "lengr@users.noreply.github.com": "LengR",
     "17255546+CharZhou@users.noreply.github.com": "CharZhou",
