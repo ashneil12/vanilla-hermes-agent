@@ -57,6 +57,11 @@ AUTHOR_MAP = {
     "mathijs.vd.hurk@gmail.com": "mathijsvandenhurk",
     "redpiggy-cyber@users.noreply.github.com": "redpiggy-cyber",  # 2026-05-30 sync
     "ashneil12@users.noreply.github.com": "ashneil12",  # fork maintainer merge-commit identity
+    "160464144+ashneil12@users.noreply.github.com": "ashneil12",  # fork maintainer (numeric noreply)
+    "ashjeff33@gmail.com": "ashneil12",  # fork maintainer (personal email)
+    "ops@hermesos.cloud": "ashneil12",  # fork ops automation identity
+    "41898282+github-actions[bot]@users.noreply.github.com": "github-actions[bot]",
+    "vinoth12940@users.noreply.github.com": "vinoth12940",
     # hermes-fork: 2026-06-03 prod upstream sync — authors flagged by check-attribution
     "25426917+Foldblade@users.noreply.github.com": "Foldblade",
     "34756395+donovan-yohan@users.noreply.github.com": "donovan-yohan",
