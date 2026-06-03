@@ -70,26 +70,23 @@ customizations:
       per-instance token. Verify the plugin mounts on a canary image build.
 
   - id: venice-managed-key-fallback
-    status: planned
-    source_in_webui: "api/streaming.py :: _resolve_managed_venice_custom_api_key (called at the 3 request-dispatch sites)"
-    intent: >
-      HermesOS runs a MANAGED Venice proxy so users get Venice models without
-      their own key (billed server-side). That endpoint is OpenAI-compatible, so
-      it travels the generic `custom` provider path — which assumes custom
-      endpoints may be keyless and stamps the placeholder `no-key-required`.
-      Managed Venice is NOT keyless, so without this it 401s. The fallback: when
-      provider==custom AND base_url contains the managed-venice marker AND the
-      resolved key is still the keyless placeholder, substitute the real
-      per-instance managed key from the container env. A user-supplied key is
-      never overridden.
-    trigger:
-      provider: custom
-      base_url_contains: "hermesos.cloud/api/managed-venice"   # also bare venice.ai → provider 'venice'
-      key_is_placeholder: ["no-key-required", "<_KEYLESS_CUSTOM_API_KEY>"]
-    injected_key_env_order: ["OPENAI_API_KEY", "VENICE_API_KEY"]   # per-instance managed key
-    on_conflict: merge-careful
-    verify_test: "a managed-Venice chat with no user key resolves a key end-to-end (not no-key-required)"
-    note: "HIGHEST merge risk — a hook INSIDE upstream's per-request key resolver, not a standalone file. Re-insert in the agent's provider/key resolver; re-verify after ANY upstream change to custom-provider key resolution."
+    status: resolved-no-code        # the agent handles this natively; NO code port, NO merge risk
+    source_in_webui: "api/streaming.py :: _resolve_managed_venice_custom_api_key (a webui-only workaround)"
+    finding: >
+      The webui hook only existed because webui's generic `custom` resolver
+      stamped a `no-key-required` placeholder and had no way to read a key from
+      env at runtime. The UPSTREAM AGENT already supports this: a custom
+      provider entry may declare `key_env` (or `api_key_env`) and the agent
+      resolves the key from that env var at request time
+      (agent/auxiliary_client.py:3582 `os.getenv(custom_key_env)`, and the main
+      path at agent/agent_init.py:802). Native `provider: venice` reads
+      VENICE_API_KEY directly. So both Venice access patterns work with config
+      alone.
+    resolution:
+      native_venice: "provider: venice  → reads VENICE_API_KEY env (works as-is)"
+      managed_custom_endpoint: "custom_providers entry with key_env: VENICE_API_KEY (or OPENAI_API_KEY) → agent reads injected env key at runtime"
+    on_conflict: take-theirs        # we customize NOTHING here now; upstream owns key resolution
+    provisioner_note: "When a managed-Venice custom OpenAI-compatible provider is configured, set key_env (not a literal key). No agent code, no streaming-layer patch."
 
   - id: aeon-delegation-panel
     status: planned
