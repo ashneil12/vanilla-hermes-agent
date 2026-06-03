@@ -1,0 +1,133 @@
+# HermesOS Customizations Manifest
+# =================================
+# The CONTRACT that governs autonomous upstream merges. The Aeon auto-update
+# agent reads this BEFORE resolving any merge conflict against
+# NousResearch/hermes-agent. It declares which changes are OURS (preserve),
+# which always take upstream (re-forking them is a bug), and how to reconcile
+# the few that overlap.
+#
+# FEEDBACK LOOP: whenever we add or change a HermesOS customization, we add or
+# update its entry here in the SAME change. That is how the agent "stays aware"
+# of our work on every future merge. An undeclared customization is one the
+# auto-merge is allowed to clobber — so: no entry, no protection.
+#
+# Design principle: keep our changes ADDITIVE (new files beside upstream), not
+# INVASIVE (edits inside upstream files). Additive changes never conflict, so
+# the agent can merge unattended. Every "merge-careful" entry below is a place
+# we failed that principle and must watch.
+
+version: 1
+forks:
+  canary: ashneil12/vanilla-hermes-agent-canary      # bleeding edge
+  prod:   ashneil12/vanilla-hermes-agent             # trails canary by 3h
+upstream: NousResearch/hermes-agent
+
+# on_conflict vocabulary
+policies:
+  keep-ours:     "Our version wins. Additive/standalone; upstream rarely touches it."
+  take-theirs:   "Upstream wins. We do not customize this — keeping 'ours' is a bug."
+  merge-careful: "Both sides changed. Reconcile semantically, re-run the named test(s), escalate if not confident."
+
+# ---------------------------------------------------------------------------
+# Things we OWN. Preserve across merges per on_conflict.
+# ---------------------------------------------------------------------------
+customizations:
+  - id: webchat-web-shim
+    status: live
+    files:
+      - path: apps/desktop/src/lib/web-shim.ts
+        ownership: whole-file            # entirely ours
+      - path: apps/desktop/src/main.tsx
+        ownership: one-line              # only: `import './lib/web-shim'` at top
+    intent: >
+      Hosted-web bridge so the desktop renderer runs as a browser SPA against a
+      remote gateway (provides window.hermesDesktop via fetch/WS instead of
+      Electron IPC), plus the HermesOS "⊞ Dashboard" launcher button.
+    on_conflict: keep-ours
+    note: "If upstream reorders main.tsx imports, just keep our import line present."
+
+  - id: hermesos-brand-skin
+    status: planned
+    files: []                            # theme token overrides — filled in during port
+    intent: "HermesOS gold/bronze skin + light preset for the web/desktop surfaces."
+    on_conflict: keep-ours
+
+  - id: health-egress
+    status: planned
+    source_in_webui: "api/health_egress.py  (route: GET /api/health/egress)"
+    intent: >
+      Synthetic outbound DNS/TCP egress probe. LOAD-BEARING: the Hermesdeploy
+      fleet egress-sweep cron GETs it on every VM. Must exist before webui is
+      dropped.
+    on_conflict: keep-ours
+    port_as: "New additive module + a dashboard route. Do not edit upstream networking code."
+
+  - id: venice-managed-key-fallback
+    status: planned
+    source_in_webui: "api/streaming.py :: _resolve_managed_venice_custom_api_key (called at the 3 request-dispatch sites)"
+    intent: >
+      HermesOS runs a MANAGED Venice proxy so users get Venice models without
+      their own key (billed server-side). That endpoint is OpenAI-compatible, so
+      it travels the generic `custom` provider path — which assumes custom
+      endpoints may be keyless and stamps the placeholder `no-key-required`.
+      Managed Venice is NOT keyless, so without this it 401s. The fallback: when
+      provider==custom AND base_url contains the managed-venice marker AND the
+      resolved key is still the keyless placeholder, substitute the real
+      per-instance managed key from the container env. A user-supplied key is
+      never overridden.
+    trigger:
+      provider: custom
+      base_url_contains: "hermesos.cloud/api/managed-venice"   # also bare venice.ai → provider 'venice'
+      key_is_placeholder: ["no-key-required", "<_KEYLESS_CUSTOM_API_KEY>"]
+    injected_key_env_order: ["OPENAI_API_KEY", "VENICE_API_KEY"]   # per-instance managed key
+    on_conflict: merge-careful
+    verify_test: "a managed-Venice chat with no user key resolves a key end-to-end (not no-key-required)"
+    note: "HIGHEST merge risk — a hook INSIDE upstream's per-request key resolver, not a standalone file. Re-insert in the agent's provider/key resolver; re-verify after ANY upstream change to custom-provider key resolution."
+
+  - id: aeon-delegation-panel
+    status: planned
+    source_in_webui: "api/aeon.py (writes skills.config.aeon_github_pat / aeon_fork_repo)"
+    intent: "AEON GitHub-delegation settings UI. The `aeon` skill itself is upstream-compatible; only the settings panel is ours."
+    on_conflict: keep-ours
+
+  - id: first-run-onboarding
+    status: planned
+    source_in_webui: "api/bootstrap.py + a streaming hook"
+    intent: "First-run identity-discovery prompt, once per newly provisioned agent."
+    on_conflict: keep-ours
+
+  - id: telemetry-deltas
+    status: planned
+    intent: >
+      Surface day-of-week + hour-of-day activity heatmaps and cost/token
+      share-% on the dashboard Analytics page, and default
+      dashboard.show_token_analytics to true.
+    on_conflict: merge-careful
+    note: "Upstream InsightsEngine already computes activity patterns; we expose them. Re-check if upstream changes the analytics endpoint shape."
+
+# ---------------------------------------------------------------------------
+# We NEVER customize these. Take upstream, always. If a merge tries to keep
+# 'ours' here, that is a regression to escalate — it means we accidentally
+# re-forked something upstream now owns better than we do.
+# ---------------------------------------------------------------------------
+take_upstream_always:
+  - chat, streaming, message rendering (assistant-ui)
+  - sessions, persistence, resume
+  - models, providers, profiles
+  - cron, skills, MCP
+  - i18n / locales
+  - gateway + messaging platform adapters (Telegram/Discord/Slack/WhatsApp/Signal)
+  - the dashboard web/ SPA and hermes_cli/web_server.py routes
+
+# ---------------------------------------------------------------------------
+# Autonomy guardrails for the Aeon agent.
+# ---------------------------------------------------------------------------
+autonomy:
+  sync_interval: 3h
+  prod_trails_canary: 3h
+  rollout: pull-based            # VMs pull their image tag; Aeon never holds fleet SSH
+  canary_tag: ":canary"
+  prod_tag: ":stable"            # promote = re-tag the 3h-soaked canary digest
+  on_ci_red: hold-and-alert      # never ship a red build
+  on_low_confidence_merge: hold-and-alert
+  per_vm_updater: "self health-check + auto-rollback to previous digest if unhealthy"

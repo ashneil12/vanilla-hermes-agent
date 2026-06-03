@@ -1,0 +1,399 @@
+/**
+ * Hosted-web shim for `window.hermesDesktop`.
+ *
+ * The desktop renderer normally gets all native capability through the
+ * Electron preload bridge (`electron/preload.cjs`). When this same renderer
+ * is built and served as a plain browser SPA (HermesOS "web rich-chat"),
+ * there is no preload — so we install a browser-native implementation here.
+ *
+ * Design:
+ *  - CHAT PATH is fully supported: `getConnection()` resolves the backend
+ *    base URL + WS URL + bearer token from page origin + injected config, and
+ *    `api()` is a `fetch` wrapper. The JSON-RPC gateway WebSocket and the REST
+ *    session/config endpoints are all served by the same backend
+ *    (`hermes_cli/web_server.py`), reachable through the edge Caddy `/desktop`
+ *    route.
+ *  - OS conveniences (notify, clipboard, open-external, image save, mic) map
+ *    to standard browser APIs.
+ *  - LOCAL-only features (terminal PTY, local FS browse/preview/watch, native
+ *    file dialogs, auto-update, bootstrap installer) are benign stubs — the
+ *    side panels that use them are not on the chat critical path.
+ *
+ * This module is a SIDE-EFFECT import: it installs the global only when no
+ * Electron bridge is present, so importing it under Electron is a no-op.
+ */
+
+interface WebRuntimeConfig {
+  /** API base path that the edge proxy maps to the dashboard backend. */
+  apiBase: string
+  /** Bearer token for the dashboard backend. */
+  token: string
+}
+
+function resolveConfig(): WebRuntimeConfig {
+  const w = window as unknown as {
+    __HERMES_WEB_API_BASE__?: string
+    __HERMES_WEB_TOKEN__?: string
+  }
+
+  // Token precedence: location.hash (#token=...) → injected global → stored.
+  let token = ''
+  try {
+    const hash = window.location.hash.replace(/^#/, '')
+    const params = new URLSearchParams(hash)
+    const fromHash = params.get('token')
+    if (fromHash) {
+      token = fromHash
+      // Persist for reloads, then scrub the token out of the visible URL.
+      try {
+        sessionStorage.setItem('hermes_web_token', fromHash)
+      } catch {
+        /* ignore */
+      }
+      params.delete('token')
+      const rest = params.toString()
+      const cleanHash = rest ? `#${rest}` : ''
+      window.history.replaceState(null, '', window.location.pathname + window.location.search + cleanHash)
+    }
+  } catch {
+    /* ignore */
+  }
+  if (!token && typeof w.__HERMES_WEB_TOKEN__ === 'string') {
+    token = w.__HERMES_WEB_TOKEN__
+  }
+  if (!token) {
+    try {
+      token = sessionStorage.getItem('hermes_web_token') ?? ''
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const apiBase = (typeof w.__HERMES_WEB_API_BASE__ === 'string' ? w.__HERMES_WEB_API_BASE__ : '/desktop').replace(
+    /\/$/,
+    ''
+  )
+
+  return { apiBase, token }
+}
+
+function buildUrls(config: WebRuntimeConfig): { baseUrl: string; wsUrl: string } {
+  const origin = window.location.origin
+  const baseUrl = `${origin}${config.apiBase}`
+  const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const wsBase = `${wsProto}//${window.location.host}${config.apiBase}`
+  const qs = config.token ? `?token=${encodeURIComponent(config.token)}` : ''
+  const wsUrl = `${wsBase}/api/ws${qs}`
+  return { baseUrl, wsUrl }
+}
+
+async function fetchJson<T>(request: { path: string; method?: string; body?: unknown; timeoutMs?: number }): Promise<T> {
+  const config = resolveConfig()
+  const { baseUrl } = buildUrls(config)
+  const controller = new AbortController()
+  const timeout = request.timeoutMs && request.timeoutMs > 0 ? request.timeoutMs : 30_000
+  const timer = window.setTimeout(() => controller.abort(), timeout)
+  try {
+    const headers: Record<string, string> = {}
+    if (config.token) {
+      headers.Authorization = `Bearer ${config.token}`
+    }
+    let body: BodyInit | undefined
+    if (request.body !== undefined && request.body !== null) {
+      headers['Content-Type'] = 'application/json'
+      body = JSON.stringify(request.body)
+    }
+    const res = await fetch(`${baseUrl}${request.path}`, {
+      method: request.method ?? (request.body !== undefined ? 'POST' : 'GET'),
+      headers,
+      body,
+      signal: controller.signal,
+      credentials: 'omit'
+    })
+    const text = await res.text()
+    const data = text ? JSON.parse(text) : undefined
+    if (!res.ok) {
+      const message =
+        (data && typeof data === 'object' && 'error' in data && (data as { error?: string }).error) ||
+        `HTTP ${res.status} for ${request.path}`
+      throw new Error(String(message))
+    }
+    return data as T
+  } finally {
+    window.clearTimeout(timer)
+  }
+}
+
+function noopUnsubscribe(): () => void {
+  return () => {}
+}
+
+function triggerDownload(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 10_000)
+}
+
+function installWebShim(): void {
+  const config = resolveConfig()
+
+  const bridge = {
+    getConnection: async () => {
+      const fresh = resolveConfig()
+      const { baseUrl, wsUrl } = buildUrls(fresh)
+      return {
+        baseUrl,
+        wsUrl,
+        token: fresh.token,
+        mode: 'remote' as const,
+        source: 'env' as const,
+        isFullscreen: false,
+        nativeOverlayWidth: 0,
+        windowButtonPosition: null,
+        logs: [] as string[]
+      }
+    },
+
+    getBootProgress: async () => ({
+      error: null,
+      fakeMode: false,
+      message: 'ready',
+      phase: 'ready',
+      progress: 100,
+      running: false,
+      timestamp: Date.now()
+    }),
+
+    getConnectionConfig: async () => ({
+      envOverride: true,
+      mode: 'remote' as const,
+      remoteTokenPreview: null,
+      remoteTokenSet: Boolean(config.token),
+      remoteUrl: `${window.location.origin}${config.apiBase}`
+    }),
+    saveConnectionConfig: async (p: unknown) => ({
+      envOverride: true,
+      mode: 'remote' as const,
+      remoteTokenPreview: null,
+      remoteTokenSet: Boolean(config.token),
+      remoteUrl: `${window.location.origin}${config.apiBase}`,
+      ...(p as object)
+    }),
+    applyConnectionConfig: async (p: unknown) => bridge.saveConnectionConfig(p),
+    testConnectionConfig: async () => {
+      try {
+        const status = await fetchJson<{ version?: string }>({ path: '/api/status' })
+        return { baseUrl: `${window.location.origin}${config.apiBase}`, ok: true, version: status?.version ?? null }
+      } catch {
+        return { baseUrl: `${window.location.origin}${config.apiBase}`, ok: false, version: null }
+      }
+    },
+
+    api: fetchJson,
+
+    notify: async (payload: { title?: string; body?: string; silent?: boolean }) => {
+      try {
+        if (typeof Notification === 'undefined') return false
+        if (Notification.permission === 'granted') {
+          new Notification(payload.title ?? 'Hermes', { body: payload.body, silent: payload.silent })
+          return true
+        }
+        if (Notification.permission !== 'denied') {
+          const perm = await Notification.requestPermission()
+          if (perm === 'granted') {
+            new Notification(payload.title ?? 'Hermes', { body: payload.body, silent: payload.silent })
+            return true
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+      return false
+    },
+
+    requestMicrophoneAccess: async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        stream.getTracks().forEach(t => t.stop())
+        return true
+      } catch {
+        return false
+      }
+    },
+
+    // Local-filesystem reads are not available in the browser. Resolve to
+    // empty/benign values so the (non-chat) preview/files panels degrade
+    // gracefully rather than crash.
+    readFileDataUrl: async () => '',
+    readFileText: async (filePath: string) => ({ path: filePath, text: '', binary: false }),
+    selectPaths: async () => [],
+    readDir: async () => ({ entries: [] }),
+    gitRoot: async () => null,
+    normalizePreviewTarget: async () => null,
+    watchPreviewFile: async (url: string) => ({ id: 'web-noop', path: url }),
+    stopPreviewFileWatch: async () => true,
+
+    writeClipboard: async (text: string) => {
+      try {
+        await navigator.clipboard.writeText(text)
+        return true
+      } catch {
+        return false
+      }
+    },
+
+    saveImageFromUrl: async (url: string) => {
+      try {
+        const res = await fetch(url)
+        const blob = await res.blob()
+        const name = url.split('/').pop()?.split('?')[0] || 'image.png'
+        triggerDownload(blob, name)
+        return true
+      } catch {
+        return false
+      }
+    },
+    saveImageBuffer: async (data: ArrayBuffer | Uint8Array, ext: string) => {
+      const blob = new Blob([data as BlobPart], { type: `image/${ext.replace(/^\./, '')}` })
+      triggerDownload(blob, `image.${ext.replace(/^\./, '')}`)
+      return 'download'
+    },
+    saveClipboardImage: async () => '',
+    getPathForFile: () => '',
+
+    setTitleBarTheme: () => {},
+    setPreviewShortcutActive: () => {},
+
+    openExternal: async (url: string) => {
+      window.open(url, '_blank', 'noopener,noreferrer')
+    },
+    fetchLinkTitle: async (url: string) => url,
+
+    settings: {
+      getDefaultProjectDir: async () => ({ defaultLabel: 'Workspace', dir: null }),
+      pickDefaultProjectDir: async () => ({ canceled: true, dir: null }),
+      setDefaultProjectDir: async (dir: null | string) => ({ dir })
+    },
+
+    revealLogs: async () => ({ ok: false, path: '', error: 'unavailable on web' }),
+    getRecentLogs: async () => ({ path: '', lines: [] as string[] }),
+
+    // Terminal side panel: no PTY in the browser.
+    terminal: {
+      start: async () => {
+        throw new Error('Terminal is not available in the web client')
+      },
+      write: async () => false,
+      resize: async () => false,
+      dispose: async () => true,
+      onData: () => noopUnsubscribe(),
+      onExit: () => noopUnsubscribe()
+    },
+
+    onClosePreviewRequested: () => noopUnsubscribe(),
+    onOpenUpdatesRequested: () => noopUnsubscribe(),
+    onWindowStateChanged: () => noopUnsubscribe(),
+    onPreviewFileChanged: () => noopUnsubscribe(),
+    onBackendExit: () => noopUnsubscribe(),
+    onBootProgress: () => noopUnsubscribe(),
+
+    getBootstrapState: async () => ({
+      active: false,
+      manifest: null,
+      stages: {},
+      error: null,
+      log: [] as Array<{ ts: number; stage: string | null; line: string }>,
+      startedAt: null,
+      completedAt: null,
+      unsupportedPlatform: null
+    }),
+    resetBootstrap: async () => ({ ok: true }),
+    repairBootstrap: async () => ({ ok: true }),
+    cancelBootstrap: async () => ({ ok: true, cancelled: false }),
+    onBootstrapEvent: () => noopUnsubscribe(),
+
+    getVersion: async () => ({
+      appVersion: 'web',
+      electronVersion: '',
+      nodeVersion: '',
+      platform: 'web',
+      hermesRoot: ''
+    }),
+
+    updates: {
+      check: async () => ({ supported: false, reason: 'web client', message: 'Updates managed server-side' }),
+      apply: async () => ({ ok: false, error: 'Updates managed server-side' }),
+      getBranch: async () => ({ branch: 'web' }),
+      setBranch: async (name: string) => ({ branch: name }),
+      onProgress: () => noopUnsubscribe()
+    }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ;(window as any).hermesDesktop = bridge
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ;(window as any).__HERMES_WEB_CLIENT__ = true
+}
+
+/**
+ * Inject a small "Dashboard" launcher button (HermesOS-specific) that opens
+ * the upstream config/telemetry/TUI dashboard surface (`/dash`) in a new tab,
+ * carrying the session token. Lives here in our shim — NOT in an upstream
+ * component — so the hourly upstream sync never conflicts with it.
+ */
+function installDashboardLauncher(): void {
+  const mount = () => {
+    if (document.getElementById('hermesos-dash-launcher')) return
+    const token = resolveConfig().token
+    const btn = document.createElement('button')
+    btn.id = 'hermesos-dash-launcher'
+    btn.type = 'button'
+    btn.textContent = '⊞ Dashboard'
+    btn.title = 'Open the full dashboard — telemetry, config, channels, TUI chat'
+    btn.setAttribute(
+      'style',
+      [
+        'position:fixed',
+        'right:14px',
+        'bottom:14px',
+        'z-index:2147483647',
+        'padding:7px 12px',
+        'font:600 12px/1 system-ui,-apple-system,sans-serif',
+        'color:#1a1a2e',
+        'background:linear-gradient(180deg,#FFD700,#DAA520)',
+        'border:1px solid #B8860B',
+        'border-radius:8px',
+        'box-shadow:0 2px 10px rgba(0,0,0,.25)',
+        'cursor:pointer',
+        'opacity:.92'
+      ].join(';')
+    )
+    btn.addEventListener('click', () => {
+      const t = resolveConfig().token
+      const url = t ? `/dash/#token=${encodeURIComponent(t)}` : '/dash/'
+      window.open(url, '_blank', 'noopener,noreferrer')
+    })
+    btn.addEventListener('mouseenter', () => (btn.style.opacity = '1'))
+    btn.addEventListener('mouseleave', () => (btn.style.opacity = '.92'))
+    document.body.appendChild(btn)
+    void token
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', mount, { once: true })
+  } else {
+    mount()
+  }
+}
+
+if (typeof window !== 'undefined' && !(window as unknown as { hermesDesktop?: unknown }).hermesDesktop) {
+  installWebShim()
+  installDashboardLauncher()
+}
+
+export {}
+
