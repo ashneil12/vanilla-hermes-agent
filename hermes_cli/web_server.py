@@ -8166,6 +8166,72 @@ _mount_plugin_api_routes()
 from hermes_cli.dashboard_auth.routes import router as _dashboard_auth_router  # noqa: E402
 app.include_router(_dashboard_auth_router)
 
+
+# ── HermesOS web rich-chat (apps/desktop renderer, hosted) ──────────────────
+# Served at /webchat from the baked-in bundle (HERMES_WEBCHAT_DIST or
+# hermes_cli/webchat_dist), registered BEFORE the SPA catch-all so mount_spa's
+# /{full_path:path} doesn't swallow it. Token + base-path are injected into
+# index.html exactly like mount_spa does for the dashboard SPA. Additive: if the
+# bundle isn't baked into the image, /webchat is simply absent.
+_WEBCHAT_DIST = (
+    Path(os.environ["HERMES_WEBCHAT_DIST"])
+    if "HERMES_WEBCHAT_DIST" in os.environ
+    else Path(__file__).parent / "webchat_dist"
+)
+if _WEBCHAT_DIST.exists() and (_WEBCHAT_DIST / "index.html").exists():
+    _webchat_index_path = _WEBCHAT_DIST / "index.html"
+
+    def _serve_webchat_index(request: Request) -> HTMLResponse:
+        prefix = _normalise_prefix(request.headers.get("x-forwarded-prefix"))
+        html = _webchat_index_path.read_text()
+        gated = bool(getattr(app.state, "auth_required", False))
+        token_js = "" if gated else f'window.__HERMES_SESSION_TOKEN__="{_SESSION_TOKEN}";'
+        boot = (
+            f"<script>{token_js}"
+            f'window.__HERMES_BASE_PATH__="{prefix}";'
+            f'window.__HERMES_AUTH_REQUIRED__={"true" if gated else "false"};'
+            f"</script>"
+        )
+        # The bundle is built with base=/webchat/, so its asset URLs already
+        # point at /webchat/...; only a non-empty proxy prefix needs rewriting.
+        if prefix:
+            html = html.replace('"/webchat/', f'"{prefix}/webchat/')
+        html = html.replace("</head>", f"{boot}</head>", 1)
+        return HTMLResponse(
+            html, headers={"Cache-Control": "no-store, no-cache, must-revalidate"}
+        )
+
+    app.mount(
+        "/webchat/assets",
+        StaticFiles(directory=_WEBCHAT_DIST / "assets"),
+        name="webchat_assets",
+    )
+
+    @app.get("/webchat")
+    async def _webchat_root(request: Request):
+        return _serve_webchat_index(request)
+
+    @app.get("/webchat/{full_path:path}")
+    async def _webchat_spa(full_path: str, request: Request):
+        # Serve a real static file (icons, fonts, sprites) when present;
+        # otherwise return the SPA shell for client-side routing.
+        candidate = _WEBCHAT_DIST / full_path
+        try:
+            if candidate.is_file() and candidate.resolve().is_relative_to(
+                _WEBCHAT_DIST.resolve()
+            ):
+                return FileResponse(candidate)
+        except (OSError, RuntimeError, ValueError):
+            pass
+        return _serve_webchat_index(request)
+
+    _log.info("Mounted HermesOS web rich-chat at /webchat (%s)", _WEBCHAT_DIST)
+else:
+    _log.info(
+        "HermesOS web rich-chat bundle not present (%s) — /webchat not mounted",
+        _WEBCHAT_DIST,
+    )
+
 mount_spa(app)
 
 

@@ -34,6 +34,10 @@ function resolveConfig(): WebRuntimeConfig {
   const w = window as unknown as {
     __HERMES_WEB_API_BASE__?: string
     __HERMES_WEB_TOKEN__?: string
+    // Injected by the dashboard backend (hermes_cli/web_server.py) when this
+    // bundle is served from the agent image, mirroring the dashboard SPA.
+    __HERMES_SESSION_TOKEN__?: string
+    __HERMES_BASE_PATH__?: string
   }
 
   // Token precedence: location.hash (#token=...) → injected global → stored.
@@ -58,6 +62,10 @@ function resolveConfig(): WebRuntimeConfig {
   } catch {
     /* ignore */
   }
+  // Image-served: the backend injects __HERMES_SESSION_TOKEN__ into index.html.
+  if (!token && typeof w.__HERMES_SESSION_TOKEN__ === 'string' && w.__HERMES_SESSION_TOKEN__) {
+    token = w.__HERMES_SESSION_TOKEN__
+  }
   if (!token && typeof w.__HERMES_WEB_TOKEN__ === 'string') {
     token = w.__HERMES_WEB_TOKEN__
   }
@@ -69,10 +77,18 @@ function resolveConfig(): WebRuntimeConfig {
     }
   }
 
-  const apiBase = (typeof w.__HERMES_WEB_API_BASE__ === 'string' ? w.__HERMES_WEB_API_BASE__ : '/desktop').replace(
-    /\/$/,
-    ''
-  )
+  // API base precedence: __HERMES_BASE_PATH__ (injected by the backend when
+  // image-served — may legitimately be "" for root, so test by type) →
+  // __HERMES_WEB_API_BASE__ (hand-deploy override) → "/desktop" default.
+  let apiBase: string
+  if (typeof w.__HERMES_BASE_PATH__ === 'string') {
+    apiBase = w.__HERMES_BASE_PATH__
+  } else if (typeof w.__HERMES_WEB_API_BASE__ === 'string') {
+    apiBase = w.__HERMES_WEB_API_BASE__
+  } else {
+    apiBase = '/desktop'
+  }
+  apiBase = apiBase.replace(/\/$/, '')
 
   return { apiBase, token }
 }
