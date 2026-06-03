@@ -56,6 +56,15 @@ AUTHOR_MAP = {
     "mathijs.vd.hurk@gmail.com": "mathijsvandenhurk",
     "redpiggy-cyber@users.noreply.github.com": "redpiggy-cyber",  # 2026-05-30 sync
     "ashneil12@users.noreply.github.com": "ashneil12",  # fork maintainer merge-commit identity
+    # hermes-fork: 2026-06-03 prod upstream sync — authors flagged by check-attribution
+    "25426917+Foldblade@users.noreply.github.com": "Foldblade",
+    "34756395+donovan-yohan@users.noreply.github.com": "donovan-yohan",
+    "39024513+whyhkzk@users.noreply.github.com": "whyhkzk",
+    "49880658+ashneil12@users.noreply.github.com": "ashneil12",
+    "61507425+Julientalbot@users.noreply.github.com": "Julientalbot",
+    "alaamohanad169@gmail.com": "Spider-Vers",
+    "info@aminvakil.com": "aminvakil",
+    "nikpolale@gmail.com": "polnikale",
     "ben.bartholomew@vectorize.io": "benfrank241",
     "74339271+SaguaroDev@users.noreply.github.com": "SaguaroDev",
     "subw3@mail2.sysu.edu.cn": "Subway2023",
