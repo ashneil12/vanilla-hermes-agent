@@ -349,7 +349,15 @@ def run(
     # may cap it, but never silently — if it suppresses a loop the agent reasoned, say so.
     want_loop = (approach.shape == "loop") if approach.ok else decision.loop_until_dry
     effective_loop = want_loop and not light
-    if effective_loop and cfg.streaming_discovery:
+    # streaming discovery: explicit flag wins; AUTO (None) turns it on only when a
+    # concurrency-safe backend is configured — that's where parallel on-the-fly spawning
+    # is a real win. The serial thread-unsafe default stays round-based (cheaper replan
+    # profile), so nothing changes there until a real concurrency backend opts in.
+    if cfg.streaming_discovery is None:
+        use_streaming = bool(cfg.concurrency and cfg.concurrency > 1)
+    else:
+        use_streaming = bool(cfg.streaming_discovery)
+    if effective_loop and use_streaming:
         # NO-BARRIER discovery: dispatch the seed finders, and the INSTANT one returns a
         # high-signal finding, spawn a targeted follow-up finder that enters the pool while
         # the others are still running — "spawn agents on the fly as work comes back",

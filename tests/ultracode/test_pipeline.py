@@ -134,3 +134,25 @@ def test_drive_graph_skips_dependents_of_a_failure():
     drive_graph(g, dispatch, concurrency=2)
     assert g.get("a").status.value == "failed"
     assert g.get("b").status.value == "skipped"   # fail-fast skip propagation, no hang
+
+
+def test_drive_graph_skip_propagation_is_order_independent():
+    # regression: a chain a(fail)->b->c->d where c,d are inserted BEFORE their dep b
+    # must NOT leave c/d PENDING after the driver returns (fixpoint skip-propagation).
+    g = TaskGraph()
+    g.add(TaskSpec("a", kind="x"))
+    g.add(TaskSpec("d", deps=("c",), kind="x"))   # dependents inserted BEFORE their deps
+    g.add(TaskSpec("c", deps=("b",), kind="x"))
+    g.add(TaskSpec("b", deps=("a",), kind="x"))
+
+    def dispatch(spec):
+        if spec.id == "a":
+            raise ValueError("boom")
+        return "ok"
+
+    drive_graph(g, dispatch, concurrency=4)
+    # assert BEFORE is_complete() — the driver itself must have resolved the tail
+    assert g.get("a").status.value == "failed"
+    assert g.get("b").status.value == "skipped"
+    assert g.get("c").status.value == "skipped"   # was leaking PENDING pre-fix
+    assert g.get("d").status.value == "skipped"

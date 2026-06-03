@@ -290,9 +290,11 @@ def test_streaming_discovery_spawns_followup_finder_on_the_fly():
                             "summary": json.dumps({"findings": [{"claim": "auth bypass", "locator": "auth.py:3", "evidence": "e", "severity": "high"}]})})
         return json.dumps({"results": out})
 
+    # AUTO default: streaming_discovery=None + a concurrency-safe backend (concurrency=4)
+    # -> streaming engages automatically, no explicit flag needed.
     res = run("audit the auth code thoroughly", context="x" * 200,
               aux_call_fn=aux, delegate_fn=delegate, force_orchestrate=True, enable_ledger=False,
-              config=UltracodeConfig(streaming_discovery=True, concurrency=4, verify_lenses=[VerifyLens.CORRECTNESS]))
+              config=UltracodeConfig(concurrency=4, verify_lenses=[VerifyLens.CORRECTNESS]))
     assert any("stream-discover" in s for s in res.stages)               # the streaming path ran
     assert any("spawned" in c and "ON THE FLY" in c for c in res.caps_announced)  # announced
     claims = {f.claim for f in res.findings}
