@@ -31,20 +31,20 @@ def test_computable_answer_retries_on_error():
     assert r.ran and r.answer == "42" and calls["n"] == 2     # retried once with the error
 
 
-def test_harness_execution_assist_short_circuits_to_compute():
+def test_harness_execution_assist_folds_compute_as_evidence():
+    # AUGMENT not replace: the computed value is folded into the material as evidence and the
+    # reasoning path produces the final answer (so multi-part/completeness is never lost).
     def aux(**kwargs):
         sysm = kwargs["messages"][0]["content"].lower()
         if "writing and running code" in sysm:   # the compute system prompt
             return "```python\nprint(100001101010)\n```"
-        return "solo answer"
-    def delegate(*, tasks, parent_agent, role):
-        return "{}"
+        return kwargs["messages"][-1]["content"]  # solo path: echo so we can see the injected evidence
     res = run("Find the smallest multiple of 2026 using only digits 0 and 1.",
-              aux_call_fn=aux, delegate_fn=delegate, enable_ledger=False,
+              aux_call_fn=aux, delegate_fn=lambda **k: "{}", enable_ledger=False,
               config=UltracodeConfig(execution_assist=True))
-    assert res.mode == "compute"
-    assert "100001101010" in res.answer
-    assert any("execution" in c for c in res.caps_announced)
+    assert res.mode != "compute"                                   # does NOT short-circuit
+    assert "100001101010" in res.answer                            # computed value reached the answer via reasoning
+    assert any("execution evidence" in c for c in res.caps_announced)
 
 
 def test_execution_assist_off_by_default_unchanged():
