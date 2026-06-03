@@ -46,6 +46,29 @@ customizations:
     on_conflict: keep-ours
     note: "If upstream reorders main.tsx imports, just keep our import line present."
 
+  - id: webchat-image-serve
+    status: live                   # baked into the agent image (pending canary-build verify)
+    files:
+      - path: hermes_cli/web_server.py
+        ownership: block            # mount_webchat block inserted before mount_spa(app)
+        on_conflict: merge-careful  # upstream owns this file's SPA serving; re-apply our /webchat mount
+      - path: Dockerfile
+        ownership: block            # apps/* manifest COPYs + the `vite build --base=/webchat/` step
+        on_conflict: merge-careful
+      - path: pyproject.toml
+        ownership: one-line         # webchat_dist/**/* in package-data
+        on_conflict: keep-ours
+      - path: apps/desktop/package.json
+        ownership: one-line         # node-pty → optionalDependencies (web build never needs it)
+        on_conflict: keep-ours
+    intent: >
+      Build the desktop renderer into hermes_cli/webchat_dist at image-build and
+      serve it at /webchat from web_server.py (token + base-path injected like
+      the dashboard SPA). Makes the rich chat durable + fleet-shipped, retiring
+      the per-VM hand-deploy + Caddy guard.
+    serves: "GET /webchat (+ /webchat/assets/*) from the baked-in bundle"
+    follow_up: "Provisioner (Phase 2b): edge-route /webchat → dashboard:9119/webchat; then retire the per-instance webchat dir + route guard."
+
   - id: hermesos-brand-skin
     status: planned
     files: []                            # theme token overrides — filled in during port
