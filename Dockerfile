@@ -25,7 +25,7 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/opt/hermes/.playwright
 # hermes process, the dashboard, and per-profile gateways.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    ca-certificates curl iputils-ping python3 python-is-python3 ripgrep ffmpeg gcc g++ make python3-dev python3-venv libffi-dev procps git openssh-client docker-cli xz-utils && \
+    ca-certificates curl iputils-ping python3 python-is-python3 ripgrep ffmpeg gcc python3-dev python3-venv libffi-dev procps git openssh-client docker-cli xz-utils && \
     rm -rf /var/lib/apt/lists/*
 
 # GitHub CLI (gh) — useful for general GitHub work by the agent. (The aeon skill
@@ -127,10 +127,6 @@ COPY package.json package-lock.json ./
 COPY web/package.json web/
 COPY ui-tui/package.json ui-tui/
 COPY ui-tui/packages/hermes-ink/ ui-tui/packages/hermes-ink/
-# HermesOS: the apps/* workspaces (desktop renderer → hosted /webchat bundle,
-# and its @hermes/shared dep) so `npm install` resolves their deps too.
-COPY apps/desktop/package.json apps/desktop/
-COPY apps/shared/package.json apps/shared/
 
 # `npm_config_install_links=false` forces npm to install `file:` deps as
 # symlinks instead of copies.  This is the default since npm 10+, which is
@@ -184,9 +180,6 @@ COPY --chown=hermes:hermes . .
 # Build browser dashboard and terminal UI assets.
 RUN cd web && npm run build && \
     cd ../ui-tui && npm run build
-# HermesOS: build the desktop renderer as the hosted web rich-chat bundle,
-# served by web_server.py at /webchat (base=/webchat/ so asset URLs resolve).
-RUN cd apps/desktop && npx vite build --base=/webchat/ --outDir ../../hermes_cli/webchat_dist --emptyOutDir
 
 # ---------- Permissions ----------
 # Make install dir world-readable so any HERMES_UID can read it at runtime.
