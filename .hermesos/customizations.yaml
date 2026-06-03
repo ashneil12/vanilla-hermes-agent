@@ -58,9 +58,6 @@ customizations:
       - path: pyproject.toml
         ownership: one-line         # webchat_dist/**/* in package-data
         on_conflict: keep-ours
-      - path: apps/desktop/package.json
-        ownership: one-line         # node-pty → optionalDependencies (web build never needs it)
-        on_conflict: keep-ours
     intent: >
       Build the desktop renderer into hermes_cli/webchat_dist at image-build and
       serve it at /webchat from web_server.py (token + base-path injected like
