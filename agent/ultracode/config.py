@@ -50,6 +50,7 @@ class UltracodeConfig:
     discovery_max_rounds: int = 6
     discovery_dry_rounds: int = 2  # stop after K consecutive empty rounds
     reactive_replan: bool = True   # re-DERIVE the work-list from findings each round (emergent decomposition) rather than re-run the same finders
+    streaming_discovery: bool = False  # NO-BARRIER discovery: spawn follow-up finders ON THE FLY the instant a result warrants it (via pipeline.run_reactive), instead of waiting for a whole round. Opt-in; needs a concurrency-safe backend to parallelize (still reactive when serial)
 
     # -- orchestration scale (in-flight agents). None = sequential waves (real-Hermes-safe).
     # A concurrency-safe backend (DeepSeek client / patched Hermes core) can set this to 100+.
