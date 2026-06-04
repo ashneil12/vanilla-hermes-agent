@@ -87,7 +87,9 @@ const SIDEBAR_NAV: SidebarNavItem[] = [
     route: SKILLS_ROUTE
   },
   { id: 'messaging', label: 'Messaging', icon: props => <Codicon name="comment" {...props} />, route: MESSAGING_ROUTE },
-  { id: 'artifacts', label: 'Artifacts', icon: props => <Codicon name="files" {...props} />, route: ARTIFACTS_ROUTE }
+  { id: 'artifacts', label: 'Artifacts', icon: props => <Codicon name="files" {...props} />, route: ARTIFACTS_ROUTE },
+  // HermesOS web-only: opens the full dashboard (telemetry/config/channels/TUI) at /dash.
+  { id: 'admin-panel', label: 'Admin Panel', icon: props => <Codicon name="dashboard" {...props} />, action: 'admin-panel' }
 ]
 
 const WORKSPACE_PAGE = 5
@@ -416,7 +418,11 @@ export function ChatSidebar({
         <SidebarGroup className="shrink-0 p-0 pb-2 pt-[calc(var(--titlebar-height)+0.375rem)]">
           <SidebarGroupContent>
             <SidebarMenu className="gap-px">
-              {SIDEBAR_NAV.map(item => {
+              {SIDEBAR_NAV.filter(
+                item =>
+                  item.id !== 'admin-panel' ||
+                  (typeof window !== 'undefined' && (window as unknown as { __HERMES_WEB_CLIENT__?: boolean }).__HERMES_WEB_CLIENT__)
+              ).map(item => {
                 const isInteractive = Boolean(item.action) || Boolean(item.route)
 
                 const active =

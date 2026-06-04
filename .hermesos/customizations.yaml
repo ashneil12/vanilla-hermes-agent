@@ -42,7 +42,8 @@ customizations:
     intent: >
       Hosted-web bridge so the desktop renderer runs as a browser SPA against a
       remote gateway (provides window.hermesDesktop via fetch/WS instead of
-      Electron IPC), plus the HermesOS "⊞ Dashboard" launcher button.
+      Electron IPC), plus the HermesOS "Admin Panel" dashboard launcher
+      (bridge.openAdminPanel → opens /dash with the session token).
     on_conflict: keep-ours
     note: "If upstream reorders main.tsx imports, just keep our import line present."
     handoff: >
@@ -55,7 +56,31 @@ customizations:
       start") on every dashboard open. If hermesdeploy ever renames the hash
       key, update this reader to match — it is the single token entry point.
 
-  - id: webchat-serve
+  - id: admin-panel-nav
+    status: live
+    files:
+      - path: apps/desktop/src/app/types.ts
+        ownership: two-line          # add 'admin-panel' to SidebarNavId + action union
+        on_conflict: merge-careful
+      - path: apps/desktop/src/app/chat/sidebar/index.tsx
+        ownership: block             # SIDEBAR_NAV item (after artifacts) + web-client render gate
+        on_conflict: merge-careful
+      - path: apps/desktop/src/app/session/hooks/use-session-actions.ts
+        ownership: block             # selectSidebarItem branch for action 'admin-panel'
+        on_conflict: merge-careful
+    intent: >
+      A left-sidebar nav item "Admin Panel" (under Artifacts) that opens the
+      full HermesOS dashboard (telemetry / config / channels / TUI chat) at
+      /dash. Web-only — rendered only when window.__HERMES_WEB_CLIENT__ (set by
+      the web-shim); the native desktop app has no /dash route, so it never
+      shows there. Replaces the earlier floating bottom-right launcher button.
+    on_conflict: merge-careful
+    note: >
+      INVASIVE (edits upstream nav files) — the only way to get a native-looking
+      sidebar item; DOM injection into the React list gets clobbered on
+      re-render. On a merge conflict, re-add: (1) 'admin-panel' to the
+      SidebarNavId + action unions, (2) the SIDEBAR_NAV entry, (3) the
+      selectSidebarItem branch calling window.hermesDesktop.openAdminPanel.
     status: live-multistage-bake     # baked LIGHT via a throwaway builder stage
     files:
       - path: Dockerfile
