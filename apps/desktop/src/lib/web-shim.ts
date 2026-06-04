@@ -40,12 +40,16 @@ function resolveConfig(): WebRuntimeConfig {
     __HERMES_BASE_PATH__?: string
   }
 
-  // Token precedence: location.hash (#token=...) → injected global → stored.
+  // Token precedence: location.hash → injected global → stored.
+  // Hash key: the HermesOS control-plane dashboard hands the per-instance
+  // bearer off as `#iframe_token=<apiServerKey>` (the same handoff webui's
+  // shim consumes — see hermesdeploy webui-handoff.ts). A direct/manual link
+  // may use the plainer `#token=<bearer>`. Accept either; iframe_token wins.
   let token = ''
   try {
     const hash = window.location.hash.replace(/^#/, '')
     const params = new URLSearchParams(hash)
-    const fromHash = params.get('token')
+    const fromHash = params.get('iframe_token') || params.get('token')
     if (fromHash) {
       token = fromHash
       // Persist for reloads, then scrub the token out of the visible URL.
@@ -54,6 +58,7 @@ function resolveConfig(): WebRuntimeConfig {
       } catch {
         /* ignore */
       }
+      params.delete('iframe_token')
       params.delete('token')
       const rest = params.toString()
       const cleanHash = rest ? `#${rest}` : ''

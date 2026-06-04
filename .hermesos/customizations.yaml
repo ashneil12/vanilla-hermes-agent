@@ -45,6 +45,15 @@ customizations:
       Electron IPC), plus the HermesOS "⊞ Dashboard" launcher button.
     on_conflict: keep-ours
     note: "If upstream reorders main.tsx imports, just keep our import line present."
+    handoff: >
+      The control-plane dashboard hands the per-instance bearer to the surface
+      as `#iframe_token=<apiServerKey>` (hermesdeploy webui-handoff.ts —
+      createWebuiIframeHashUrl). resolveConfig() therefore reads `iframe_token`
+      FIRST, then the plainer `#token` for manual links, then the
+      backend-injected globals, then sessionStorage. Reading only `#token` was
+      the bug that left the chat WS unauthenticated (401 → "Hermes couldn't
+      start") on every dashboard open. If hermesdeploy ever renames the hash
+      key, update this reader to match — it is the single token entry point.
 
   - id: webchat-serve
     status: live-multistage-bake     # baked LIGHT via a throwaway builder stage
