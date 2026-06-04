@@ -295,6 +295,16 @@ function installWebShim(): void {
     },
     fetchLinkTitle: async (url: string) => url,
 
+    // HermesOS "Admin Panel" sidebar item → opens the full dashboard
+    // (telemetry / config / channels / TUI chat) at /dash, carrying the
+    // session token in the URL fragment so it authenticates without a
+    // second login. Web-only; the native desktop app has no /dash route.
+    openAdminPanel: () => {
+      const t = resolveConfig().token
+      const url = t ? `/dash/#iframe_token=${encodeURIComponent(t)}` : '/dash/'
+      window.open(url, '_blank', 'noopener,noreferrer')
+    },
+
     settings: {
       getDefaultProjectDir: async () => ({ defaultLabel: 'Workspace', dir: null }),
       pickDefaultProjectDir: async () => ({ canceled: true, dir: null }),
@@ -361,59 +371,13 @@ function installWebShim(): void {
   ;(window as any).__HERMES_WEB_CLIENT__ = true
 }
 
-/**
- * Inject a small "Dashboard" launcher button (HermesOS-specific) that opens
- * the upstream config/telemetry/TUI dashboard surface (`/dash`) in a new tab,
- * carrying the session token. Lives here in our shim — NOT in an upstream
- * component — so the hourly upstream sync never conflicts with it.
- */
-function installDashboardLauncher(): void {
-  const mount = () => {
-    if (document.getElementById('hermesos-dash-launcher')) return
-    const token = resolveConfig().token
-    const btn = document.createElement('button')
-    btn.id = 'hermesos-dash-launcher'
-    btn.type = 'button'
-    btn.textContent = '⊞ Dashboard'
-    btn.title = 'Open the full dashboard — telemetry, config, channels, TUI chat'
-    btn.setAttribute(
-      'style',
-      [
-        'position:fixed',
-        'right:14px',
-        'bottom:14px',
-        'z-index:2147483647',
-        'padding:7px 12px',
-        'font:600 12px/1 system-ui,-apple-system,sans-serif',
-        'color:#1a1a2e',
-        'background:linear-gradient(180deg,#FFD700,#DAA520)',
-        'border:1px solid #B8860B',
-        'border-radius:8px',
-        'box-shadow:0 2px 10px rgba(0,0,0,.25)',
-        'cursor:pointer',
-        'opacity:.92'
-      ].join(';')
-    )
-    btn.addEventListener('click', () => {
-      const t = resolveConfig().token
-      const url = t ? `/dash/#token=${encodeURIComponent(t)}` : '/dash/'
-      window.open(url, '_blank', 'noopener,noreferrer')
-    })
-    btn.addEventListener('mouseenter', () => (btn.style.opacity = '1'))
-    btn.addEventListener('mouseleave', () => (btn.style.opacity = '.92'))
-    document.body.appendChild(btn)
-    void token
-  }
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', mount, { once: true })
-  } else {
-    mount()
-  }
-}
+// NOTE: the HermesOS dashboard launcher used to be a floating bottom-right
+// button injected here. It now lives as the "Admin Panel" item in the left
+// sidebar nav (see app/chat/sidebar + bridge.openAdminPanel above), so the
+// floating button was removed.
 
 if (typeof window !== 'undefined' && !(window as unknown as { hermesDesktop?: unknown }).hermesDesktop) {
   installWebShim()
-  installDashboardLauncher()
 }
 
 export {}
