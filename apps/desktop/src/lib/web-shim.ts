@@ -376,8 +376,39 @@ function installWebShim(): void {
 // sidebar nav (see app/chat/sidebar + bridge.openAdminPanel above), so the
 // floating button was removed.
 
+/**
+ * HermesOS brand skin (web-only). Re-tints the upstream blue accent
+ * (--theme-primary / --theme-midground = #0053fd) to HermesOS gold/bronze
+ * via a high-specificity stylesheet override — additive, so it never
+ * conflicts with upstream's styles.css on a sync. Per-mode shades keep it
+ * readable: a deeper gold on light, a brighter gold on dark. The native
+ * desktop app never loads this (it has no web-shim), so it keeps upstream's
+ * default theme; only the hosted HermesOS web surface is skinned.
+ */
+function installBrandSkin(): void {
+  const inject = () => {
+    if (document.getElementById('hermesos-skin')) return
+    const style = document.createElement('style')
+    style.id = 'hermesos-skin'
+    style.textContent = [
+      ':root{',
+      '--theme-primary:#A67C1A!important;--theme-midground:#A67C1A!important;',
+      '--ui-accent:#A67C1A!important;--ui-accent-secondary:#8A6914!important;--ui-blue:#A67C1A!important;',
+      '--theme-warm:#CD7F32!important;}',
+      ':root.dark{',
+      '--theme-primary:#E0A82E!important;--theme-midground:#E0A82E!important;',
+      '--ui-accent:#E0A82E!important;--ui-accent-secondary:#C8961E!important;--ui-blue:#E0A82E!important;',
+      '--theme-warm:#CD7F32!important;}'
+    ].join('')
+    document.head.appendChild(style)
+  }
+  if (document.head) inject()
+  else document.addEventListener('DOMContentLoaded', inject, { once: true })
+}
+
 if (typeof window !== 'undefined' && !(window as unknown as { hermesDesktop?: unknown }).hermesDesktop) {
   installWebShim()
+  installBrandSkin()
 }
 
 export {}

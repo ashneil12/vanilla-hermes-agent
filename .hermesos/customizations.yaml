@@ -110,10 +110,19 @@ customizations:
       any in-place roll.
 
   - id: hermesos-brand-skin
-    status: planned
-    files: []                            # theme token overrides — filled in during port
-    intent: "HermesOS gold/bronze skin + light preset for the web/desktop surfaces."
+    status: live
+    files:
+      - path: apps/desktop/src/lib/web-shim.ts
+        ownership: block                 # installBrandSkin() — injected <style> override
+    intent: >
+      HermesOS gold/bronze skin for the hosted web surface. Re-tints upstream's
+      blue accent (--theme-primary / --theme-midground = #0053fd) to gold via a
+      shim-injected high-specificity stylesheet (#hermesos-skin) — ADDITIVE, so
+      it never conflicts with upstream styles.css on a sync. Per-mode shades:
+      #A67C1A (light) / #E0A82E (dark). Web-only — the native desktop app has no
+      web-shim, so it keeps upstream's default theme.
     on_conflict: keep-ours
+    note: "If upstream renames the --theme-* / --ui-accent tokens, update installBrandSkin to match the new var names."
 
   - id: health-egress
     status: ported            # agent plugin written; pending canary-build verification + cron repoint
