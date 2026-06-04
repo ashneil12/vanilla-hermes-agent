@@ -79,7 +79,7 @@ jobs:
           docker run --rm \
             --entrypoint sh \
             ghcr.io/ashneil12/vanilla-hermes-agent-canary:test \
-            -lc 'cd /opt/hermes && /usr/local/bin/uv pip install --python /opt/hermes/.venv/bin/python3 -q pytest && /opt/hermes/.venv/bin/python3 -m pytest tests/tools/test_media_generation_wiring.py -q'
+            -lc 'cd /opt/hermes && /usr/local/bin/uv pip install --python /opt/hermes/.venv/bin/python3 -q pytest pytest-timeout && /opt/hermes/.venv/bin/python3 -m pytest tests/tools/test_media_generation_wiring.py -q'
 
 
       - name: Log in to GitHub Container Registry
