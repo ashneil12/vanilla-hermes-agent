@@ -196,6 +196,18 @@ export const monoTheme: DesktopTheme = {
   }
 }
 
+/**
+ * HermesOS Dark — the canonical Hermes dark look. Same grayscale base as Mono,
+ * surfaced under the HermesOS name so users picking "the Hermes dark theme"
+ * land somewhere clean instead of a colored variant.
+ */
+export const hermesOSDarkTheme: DesktopTheme = {
+  name: 'hermesos-dark',
+  label: 'HermesOS Dark',
+  description: 'The signature Hermes dark — clean grayscale',
+  colors: { ...monoTheme.colors }
+}
+
 /** Neon green on black. Matches the CLI cyberpunk skin and dashboard theme. */
 export const cyberpunkTheme: DesktopTheme = {
   name: 'cyberpunk',
@@ -274,6 +286,7 @@ export const BUILTIN_THEMES: Record<string, DesktopTheme> = {
   midnight: midnightTheme,
   ember: emberTheme,
   mono: monoTheme,
+  'hermesos-dark': hermesOSDarkTheme,
   cyberpunk: cyberpunkTheme,
   slate: slateTheme
 }
