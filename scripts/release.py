@@ -45,6 +45,8 @@ ACP_REGISTRY_MANIFEST = REPO_ROOT / "acp_registry" / "agent.json"
 
 # Auto-extracted from noreply emails + manual overrides
 AUTHOR_MAP = {
+    # hermes-fork: 2026-06-05 upstream catch-up (d880b5be) — check-attribution flagged.
+    "bedirhan@codeway.co": "bedirhancode",
     # hermes-fork: salvage-commit author email variants surfaced by the
     # 2026-05-23 upstream sync (check-attribution flagged these).
     "ethie@nous": "ethernet8023",
