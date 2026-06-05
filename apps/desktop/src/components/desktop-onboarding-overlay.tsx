@@ -61,6 +61,17 @@ export interface ApiKeyOption {
 }
 
 const API_KEY_OPTIONS: ApiKeyOption[] = [
+  // HermesOS: Venice leads the picker — the recommended provider. With managed
+  // Venice, the key is injected for you (no paste needed); self-serve users can
+  // bring their own Venice key. Reached as an OpenAI-compatible endpoint.
+  {
+    id: 'venice',
+    name: 'Venice',
+    short: 'recommended · private frontier models',
+    envKey: 'VENICE_API_KEY',
+    description: 'Private, uncensored frontier models. Managed by HermesOS when enabled — otherwise paste your own Venice key.',
+    docsUrl: 'https://venice.ai/settings/api'
+  },
   {
     id: 'openrouter',
     name: 'OpenRouter',
