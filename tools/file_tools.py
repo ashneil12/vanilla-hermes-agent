@@ -315,6 +315,8 @@ def _check_credential_path(filepath: str, task_id: str = "default") -> str | Non
             pass
 
     return None
+
+
 _hermes_config_resolved: str | None = None
 _hermes_config_resolved_loaded = False
 
@@ -343,12 +345,11 @@ def _check_sensitive_path(filepath: str, task_id: str = "default") -> str | None
     except (OSError, ValueError):
         resolved = filepath
     normalized = os.path.normpath(os.path.expanduser(filepath))
-    # hermes-fork: check the Hermes config block BEFORE the temp-root allow-list.
+    # Prevent agents from modifying the Hermes config file directly.
     # approvals.mode and other security settings live here; a malicious or
     # prompt-injected agent could silently disable exec approval by writing to
-    # this file. The config can legitimately resolve under the temp root in tests
-    # and some sandboxed layouts, so this guard must run first or the temp-root
-    # early-return would let a config write through (matches canary ordering).
+    # this file. Check this before the temp-dir exemption so tests and isolated
+    # config homes under /tmp are still protected.
     hermes_config = _get_hermes_config_resolved()
     if hermes_config and (resolved == hermes_config or normalized == hermes_config):
         return (

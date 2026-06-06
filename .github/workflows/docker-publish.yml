@@ -8,16 +8,16 @@ on:
 permissions:
   contents: read
 
-# Main-branch builds publish the image used by the Proxmox VM fleet (amd64-only).
-# Prefer the newest main build over preserving older in-flight runs so a slow
-# build can't hold :stable back from the commit we are trying to bake.
+# Main-branch builds publish the image used by the Proxmox VM fleet. Prefer the
+# newest main build over preserving older in-flight runs; otherwise a slow arm64
+# build can hold :stable back from the commit we are trying to bake.
 concurrency:
   group: docker-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build-and-push:
-    if: github.repository == 'ashneil12/vanilla-hermes-agent'
+    if: github.repository == 'ashneil12/vanilla-hermes-agent-canary'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -45,7 +45,7 @@ jobs:
           file: Dockerfile
           load: true
           platforms: linux/amd64
-          tags: ghcr.io/ashneil12/vanilla-hermes-agent:test
+          tags: ghcr.io/ashneil12/vanilla-hermes-agent-canary:test
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -55,7 +55,7 @@ jobs:
           sudo chown -R 10000:10000 /tmp/hermes-test
           docker run --rm \
             -v /tmp/hermes-test:/opt/data \
-            ghcr.io/ashneil12/vanilla-hermes-agent:test --help
+            ghcr.io/ashneil12/vanilla-hermes-agent-canary:test --help
 
       - name: Test dashboard subcommand
         run: |
@@ -63,7 +63,7 @@ jobs:
           sudo chown -R 10000:10000 /tmp/hermes-test
           docker run --rm \
             -v /tmp/hermes-test:/opt/data \
-            ghcr.io/ashneil12/vanilla-hermes-agent:test dashboard --help
+            ghcr.io/ashneil12/vanilla-hermes-agent-canary:test dashboard --help
 
       # Regression gate: media (image/video/audio) tool wiring must be intact in
       # the freshly built image BEFORE we publish :stable. If an upstream-sync
@@ -72,15 +72,21 @@ jobs:
       # SHA/:stable push steps are skipped — the fleet keeps the last good image.
       - name: Media tool wiring regression gate
         run: |
+          # pytest is a dev dep and is no longer shipped in the runtime .venv
+          # (upstream moved it out), so install it ephemerally into the throwaway
+          # --rm test container before running the gate — keeps the shipped image
+          # light (cardinal rule #1) while still running the regression gate.
           docker run --rm \
             --entrypoint sh \
-            ghcr.io/ashneil12/vanilla-hermes-agent:test \
-            -lc 'cd /opt/hermes && /opt/hermes/.venv/bin/python3 -m pytest tests/tools/test_media_generation_wiring.py -q'
+            ghcr.io/ashneil12/vanilla-hermes-agent-canary:test \
+            -lc 'cd /opt/hermes && /usr/local/bin/uv pip install --python /opt/hermes/.venv/bin/python3 -q pytest pytest-timeout && /opt/hermes/.venv/bin/python3 -m pytest tests/tools/test_media_generation_wiring.py -q'
+
 
       - name: Log in to GitHub Container Registry
         if: >-
           (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-          github.event_name == 'release'
+          github.event_name == 'release' ||
+          github.event_name == 'workflow_dispatch'
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
         with:
           registry: ghcr.io
@@ -92,7 +98,7 @@ jobs:
       # clobbering :latest or :stable.
       - name: Push amd64 image with SHA tag (main branch)
         id: push_sha
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
         with:
           context: .
@@ -100,7 +106,7 @@ jobs:
           push: true
           provenance: false
           platforms: linux/amd64
-          tags: ghcr.io/ashneil12/vanilla-hermes-agent:${{ github.sha }}
+          tags: ghcr.io/ashneil12/vanilla-hermes-agent-canary:${{ github.sha }}
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha
@@ -108,10 +114,10 @@ jobs:
 
       - name: Mark SHA tag pushed
         id: mark_pushed
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
         run: echo "pushed=true" >> "$GITHUB_OUTPUT"
 
-      - name: Push image (release, amd64-only)
+      - name: Push multi-arch image (release)
         if: github.event_name == 'release'
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
         with:
@@ -119,14 +125,12 @@ jobs:
           file: Dockerfile
           push: true
           provenance: false
-          # hermes-fork: amd64-only. The fleet is all amd64 (Hetzner Ryzen);
-          # arm64 is unused and just slows the release build.
           platforms: linux/amd64
           tags: |
-            ghcr.io/ashneil12/vanilla-hermes-agent:latest
-            ghcr.io/ashneil12/vanilla-hermes-agent:stable
-            ghcr.io/ashneil12/vanilla-hermes-agent:${{ github.event.release.tag_name }}
-            ghcr.io/ashneil12/vanilla-hermes-agent:${{ github.sha }}
+            ghcr.io/ashneil12/vanilla-hermes-agent-canary:latest
+            ghcr.io/ashneil12/vanilla-hermes-agent-canary:stable
+            ghcr.io/ashneil12/vanilla-hermes-agent-canary:${{ github.event.release.tag_name }}
+            ghcr.io/ashneil12/vanilla-hermes-agent-canary:${{ github.sha }}
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha
@@ -134,9 +138,8 @@ jobs:
 
   move-floating-tags:
     if: |
-      github.repository == 'ashneil12/vanilla-hermes-agent'
-      && github.event_name == 'push'
-      && github.ref == 'refs/heads/main'
+      github.repository == 'ashneil12/vanilla-hermes-agent-canary'
+      && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch')
       && needs.build-and-push.outputs.pushed_sha_tag == 'true'
     needs: build-and-push
     runs-on: ubuntu-latest
@@ -167,7 +170,7 @@ jobs:
         id: latest_check
         run: |
           set -euo pipefail
-          image=ghcr.io/ashneil12/vanilla-hermes-agent
+          image=ghcr.io/ashneil12/vanilla-hermes-agent-canary
 
           image_json=$(
             docker buildx imagetools inspect "${image}:latest" \
@@ -225,8 +228,10 @@ jobs:
         if: steps.latest_check.outputs.push_floating == 'true'
         run: |
           set -euo pipefail
-          image=ghcr.io/ashneil12/vanilla-hermes-agent
+          image=ghcr.io/ashneil12/vanilla-hermes-agent-canary
           docker buildx imagetools create \
             --tag "${image}:latest" \
             --tag "${image}:stable" \
             "${image}:${GITHUB_SHA}"
+
+# canary: amd64-only image channel for hermesdeploy-canary dog-fooding

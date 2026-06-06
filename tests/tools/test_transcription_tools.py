@@ -1055,6 +1055,7 @@ class TestGetProviderMistral:
         monkeypatch.delenv("GROQ_API_KEY", raising=False)
         monkeypatch.delenv("VOICE_TOOLS_OPENAI_KEY", raising=False)
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("VENICE_API_KEY", raising=False)
         monkeypatch.setenv("MISTRAL_API_KEY", "test-key")
         with patch("tools.transcription_tools._HAS_FASTER_WHISPER", False), \
              patch("tools.transcription_tools._has_local_command", return_value=False), \
@@ -1068,6 +1069,7 @@ class TestGetProviderMistral:
         monkeypatch.setenv("VOICE_TOOLS_OPENAI_KEY", "sk-test")
         monkeypatch.setenv("MISTRAL_API_KEY", "test-key")
         monkeypatch.delenv("GROQ_API_KEY", raising=False)
+        monkeypatch.delenv("VENICE_API_KEY", raising=False)
         with patch("tools.transcription_tools._HAS_FASTER_WHISPER", False), \
              patch("tools.transcription_tools._has_local_command", return_value=False), \
              patch("tools.transcription_tools._HAS_OPENAI", True), \
@@ -1079,6 +1081,7 @@ class TestGetProviderMistral:
         """Auto-detect: groq (free) is preferred over mistral (paid)."""
         monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
         monkeypatch.setenv("MISTRAL_API_KEY", "test-key")
+        monkeypatch.delenv("VENICE_API_KEY", raising=False)
         with patch("tools.transcription_tools._HAS_FASTER_WHISPER", False), \
              patch("tools.transcription_tools._has_local_command", return_value=False), \
              patch("tools.transcription_tools._HAS_OPENAI", True), \
@@ -1091,6 +1094,7 @@ class TestGetProviderMistral:
         monkeypatch.delenv("GROQ_API_KEY", raising=False)
         monkeypatch.delenv("VOICE_TOOLS_OPENAI_KEY", raising=False)
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("VENICE_API_KEY", raising=False)
         monkeypatch.setenv("MISTRAL_API_KEY", "test-key")
         with patch("tools.transcription_tools._HAS_FASTER_WHISPER", False), \
              patch("tools.transcription_tools._has_local_command", return_value=False), \
@@ -1304,6 +1308,39 @@ class TestTranscribeXAI:
 
 
 # ============================================================================
+# _get_provider — Venice (HermesOS fork)
+# ============================================================================
+
+class TestGetProviderVenice:
+    """Venice-specific provider selection tests for the HermesOS managed media stack."""
+
+    def test_venice_when_key_set(self, monkeypatch):
+        monkeypatch.setenv("VENICE_API_KEY", "venice-test")
+        from tools.transcription_tools import _get_provider
+        assert _get_provider({"provider": "venice"}) == "venice"
+
+    def test_venice_explicit_no_key_returns_none(self, monkeypatch):
+        monkeypatch.delenv("VENICE_API_KEY", raising=False)
+        from tools.transcription_tools import _get_provider
+        assert _get_provider({"provider": "venice"}) == "none"
+
+    def test_auto_detect_venice_preferred_over_xai(self, monkeypatch):
+        """hermes-fork: Venice remains before xAI in cloud auto-detection."""
+        monkeypatch.delenv("GROQ_API_KEY", raising=False)
+        monkeypatch.delenv("VOICE_TOOLS_OPENAI_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
+        monkeypatch.setenv("VENICE_API_KEY", "venice-test")
+        monkeypatch.setenv("XAI_API_KEY", "xai-test")
+        with patch("tools.transcription_tools._HAS_FASTER_WHISPER", False), \
+             patch("tools.transcription_tools._has_local_command", return_value=False), \
+             patch("tools.transcription_tools._HAS_OPENAI", False), \
+             patch("tools.transcription_tools._HAS_MISTRAL", False):
+            from tools.transcription_tools import _get_provider
+            assert _get_provider({}) == "venice"
+
+
+# ============================================================================
 # _get_provider — xAI
 # ============================================================================
 
@@ -1327,6 +1364,7 @@ class TestGetProviderXAI:
         monkeypatch.delenv("VOICE_TOOLS_OPENAI_KEY", raising=False)
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
+        monkeypatch.delenv("VENICE_API_KEY", raising=False)
         monkeypatch.setenv("XAI_API_KEY", "xai-test")
         with patch("tools.transcription_tools._HAS_FASTER_WHISPER", False), \
              patch("tools.transcription_tools._has_local_command", return_value=False), \
@@ -1342,6 +1380,7 @@ class TestGetProviderXAI:
         monkeypatch.delenv("GROQ_API_KEY", raising=False)
         monkeypatch.delenv("VOICE_TOOLS_OPENAI_KEY", raising=False)
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("VENICE_API_KEY", raising=False)
         with patch("tools.transcription_tools._HAS_FASTER_WHISPER", False), \
              patch("tools.transcription_tools._has_local_command", return_value=False), \
              patch("tools.transcription_tools._HAS_OPENAI", False), \
@@ -1352,6 +1391,7 @@ class TestGetProviderXAI:
     def test_auto_detect_no_key_returns_none(self, monkeypatch):
         """Auto-detect: xai skipped when no key is set."""
         monkeypatch.delenv("XAI_API_KEY", raising=False)
+        monkeypatch.delenv("VENICE_API_KEY", raising=False)
         with patch("tools.transcription_tools._HAS_FASTER_WHISPER", False), \
              patch("tools.transcription_tools._has_local_command", return_value=False), \
              patch("tools.transcription_tools._HAS_OPENAI", False), \
