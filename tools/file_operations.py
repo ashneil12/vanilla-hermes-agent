@@ -2025,24 +2025,40 @@ class ShellFileOperations(FileOperations):
             glob_pattern = pattern
 
         fetch_limit = limit + offset
-        # Try mtime-sorted first (rg 13+); fall back to unsorted if not supported.
-        cmd_sorted = (
-            f"rg --files --sortr=modified -g {self._escape_shell_arg(glob_pattern)} "
-            f"{self._escape_shell_arg(path)} 2>/dev/null "
-            f"| head -n {fetch_limit}"
-        )
-        result = self._exec(cmd_sorted, timeout=60)
-        all_files = [f for f in result.stdout.strip().split('\n') if f]
+        glob_arg = self._escape_shell_arg(glob_pattern)
+        path_arg = self._escape_shell_arg(path)
 
-        if not all_files:
-            # --sortr may have failed on older rg; retry without it.
-            cmd_plain = (
-                f"rg --files -g {self._escape_shell_arg(glob_pattern)} "
-                f"{self._escape_shell_arg(path)} 2>/dev/null "
-                f"| head -n {fetch_limit}"
+        def _list_files(extra_flags: str) -> List[str]:
+            # Try mtime-sorted first (rg 13+); fall back to unsorted if the
+            # installed rg is too old to support --sortr.
+            cmd_sorted = (
+                f"rg --files --sortr=modified {extra_flags} -g {glob_arg} "
+                f"{path_arg} 2>/dev/null | head -n {fetch_limit}"
             )
-            result = self._exec(cmd_plain, timeout=60)
-            all_files = [f for f in result.stdout.strip().split('\n') if f]
+            out = self._exec(cmd_sorted, timeout=60).stdout
+            files = [f for f in out.strip().split('\n') if f]
+            if not files:
+                cmd_plain = (
+                    f"rg --files {extra_flags} -g {glob_arg} "
+                    f"{path_arg} 2>/dev/null | head -n {fetch_limit}"
+                )
+                out = self._exec(cmd_plain, timeout=60).stdout
+                files = [f for f in out.strip().split('\n') if f]
+            return files
+
+        all_files = _list_files("")
+
+        # rg --files also respects .gitignore, so a path pointed at a venv /
+        # site-packages / build dir can come back empty -- e.g. the `*`
+        # .gitignore that `python -m venv` writes ignores the whole tree. Retry
+        # with VCS ignore rules disabled when the default pass finds nothing.
+        # --no-ignore-vcs disables .gitignore but keeps .ignore/.rgignore and
+        # hidden-dir exclusion, so the #1558 skills-hub-cache prompt-injection
+        # fix (an `.ignore` of `*`) is preserved even on explicit .hub searches.
+        broadened = False
+        if not all_files:
+            all_files = _list_files("--no-ignore-vcs")
+            broadened = bool(all_files)
 
         page = all_files[offset:offset + limit]
 
@@ -2050,6 +2066,11 @@ class ShellFileOperations(FileOperations):
             files=page,
             total_count=len(all_files),
             truncated=len(all_files) >= fetch_limit,
+            note=(
+                "No files under ripgrep's default filters; retried with "
+                "--no-ignore-vcs (.gitignore rules disabled). Results may "
+                "include git-ignored files (e.g. packages under a venv)."
+            ) if broadened else None,
         )
     
     def _search_content(self, pattern: str, path: str, file_glob: Optional[str],
