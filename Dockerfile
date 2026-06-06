@@ -7,6 +7,20 @@ FROM ghcr.io/astral-sh/uv:0.11.6-python3.13-trixie@sha256:b3c543b6c4f23a5f2df228
 # our Debian 13 (trixie, glibc 2.41) runtime.  Bumping to a new Node major
 # is a one-line ARG change; see #4977.
 FROM node:22-bookworm-slim@sha256:7af03b14a13c8cdd38e45058fd957bf00a72bbe17feac43b1c15a689c029c732 AS node_source
+
+# ── HermesOS web rich-chat bundle (throwaway builder stage) ─────────────────
+# Builds apps/desktop into the static /webchat bundle. The full node:22-bookworm
+# image carries the build-essential + python toolchain node-pty needs. Only the
+# ~21MB static dist is copied into the runtime below — none of the ~1GB of
+# node_modules / toolchain reaches the shipped image, so in-place fleet rolls
+# stay light (this is what fixes the heavy-image VM wedge).
+FROM node:22-bookworm AS webchat_build
+WORKDIR /build
+COPY . .
+RUN npm install --no-audit --no-fund \
+ && cd apps/desktop \
+ && npx vite build --base=/webchat/ --outDir /webchat_dist --emptyOutDir
+
 FROM debian:13.4
 
 # Disable Python stdout buffering to ensure logs are printed immediately
@@ -25,7 +39,18 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/opt/hermes/.playwright
 # hermes process, the dashboard, and per-profile gateways.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    ca-certificates curl iputils-ping python3 python-is-python3 ripgrep ffmpeg gcc python3-dev python3-venv libffi-dev procps git openssh-client docker-cli xz-utils && \
+    ca-certificates curl iputils-ping python3 python-is-python3 ripgrep ffmpeg gcc python3-dev python3-venv libffi-dev libolm-dev procps git openssh-client docker-cli xz-utils && \
+    rm -rf /var/lib/apt/lists/*
+
+# GitHub CLI (gh) — useful for general GitHub work by the agent. (The aeon skill
+# itself is gh-free/curl, but gh is good to have available.) Multi-arch via the
+# official apt repo.
+RUN install -d -m 0755 /etc/apt/keyrings && \
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg && \
+    chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends gh && \
     rm -rf /var/lib/apt/lists/*
 
 # ---------- s6-overlay install ----------
@@ -157,18 +182,38 @@ RUN npm install --prefer-offline --no-audit && \
 # so Docker users can use these providers without requiring runtime
 # lazy-install access to PyPI (often blocked in containerized envs).
 #
+# The hindsight memory provider's client (hindsight-client) is baked in
+# for the same reason: it lazy-installs into /opt/hermes/.venv at first
+# use, which lives inside the (immutable) image layer rather than the
+# mounted /opt/data volume, so it is lost on every container recreate /
+# image update and recall/retain then fails with
+# `ModuleNotFoundError: No module named 'hindsight_client'` (#38128).
+#
 # The editable link is created after the source copy below.
 COPY pyproject.toml uv.lock ./
 RUN touch ./README.md
-RUN uv sync --frozen --no-install-project --extra all --extra messaging --extra anthropic --extra bedrock --extra azure-identity
+RUN uv sync --frozen --no-install-project --extra all --extra messaging --extra anthropic --extra bedrock --extra azure-identity --extra hindsight
 
 # ---------- Source code ----------
 # .dockerignore excludes node_modules, so the installs above survive.
 COPY --chown=hermes:hermes . .
 
 # Build browser dashboard and terminal UI assets.
+# The default base=/ build (-> hermes_cli/web_dist) is served at /desktop by the
+# backend (globals injected server-side). HermesOS: a SECOND base=/dash build
+# (-> hermes_cli/web_dist_dash) backs the "Admin Panel" nav item, served as a
+# static file_server by the control-plane Caddy. base-/ assets are absolute
+# (/assets/*) and 404 under /dash, and a relative base breaks SPA deep routes,
+# so /dash needs its own bundle. inject-dash-bootstrap.cjs splices a <head>
+# script supplying the base path + session token from the #iframe_token hash.
 RUN cd web && npm run build && \
+    npx vite build --base=/dash/ --outDir ../hermes_cli/web_dist_dash --emptyOutDir && \
+    node inject-dash-bootstrap.cjs ../hermes_cli/web_dist_dash/index.html && \
     cd ../ui-tui && npm run build
+# HermesOS: drop in the prebuilt rich-chat bundle from the throwaway builder
+# stage (static files only — no node_modules/toolchain). web_server.py's
+# mount_webchat serves it at /webchat.
+COPY --chown=hermes:hermes --from=webchat_build /webchat_dist /opt/hermes/hermes_cli/webchat_dist
 
 # ---------- Permissions ----------
 # Make install dir world-readable so any HERMES_UID can read it at runtime.
@@ -178,13 +223,16 @@ RUN cd web && npm run build && \
 # hermes_cli/main.py succeeds (see #18800). /opt/hermes/web is build-time
 # only (HERMES_WEB_DIST points at hermes_cli/web_dist) and is intentionally
 # not chowned here.
+# /opt/hermes/gateway is runtime-writable: Python may create __pycache__ and
+# gateway state artifacts beneath the package after services drop privileges,
+# especially when the hermes UID is remapped at boot (#27221).
 # The .venv MUST remain hermes-writable so lazy_deps.py can install
 # remaining optional platform packages and future pin bumps at first use.
 # Without this, `uv pip install` fails with EACCES and adapters silently
 # fail to load.  See tools/lazy_deps.py.
 USER root
 RUN chmod -R a+rX /opt/hermes && \
-    chown -R hermes:hermes /opt/hermes/.venv /opt/hermes/ui-tui /opt/hermes/node_modules
+    chown -R hermes:hermes /opt/hermes/.venv /opt/hermes/ui-tui /opt/hermes/gateway /opt/hermes/node_modules
 # Start as root so the s6-overlay stage2 hook can usermod/groupmod and chown
 # the data volume. Each supervised service then drops to the hermes user via
 # `s6-setuidgid hermes` in its run script. If HERMES_UID is unset, services
