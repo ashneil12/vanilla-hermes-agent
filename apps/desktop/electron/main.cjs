@@ -28,6 +28,7 @@ const { detectRemoteDisplay, isWindowsBinaryPathInWsl, isWslEnvironment } = requ
 const { runBootstrap } = require('./bootstrap-runner.cjs')
 const { canImportHermesCli, verifyHermesCli } = require('./backend-probes.cjs')
 const { probeGatewayWebSocket } = require('./gateway-ws-probe.cjs')
+const { serializeJsonBody, setJsonRequestHeaders } = require('./oauth-net-request.cjs')
 const {
   authModeFromStatus,
   buildGatewayWsUrl,
@@ -1313,6 +1314,31 @@ function resolveUpdaterBinary() {
   return fileExists(candidate) ? candidate : null
 }
 
+function repairMacUpdaterHelper(updater) {
+  if (!IS_MAC || !updater) return
+
+  try {
+    execFileSync('/usr/bin/xattr', ['-cr', updater], { stdio: 'ignore' })
+  } catch (err) {
+    rememberLog(`[updates] macOS updater helper quarantine repair skipped: ${err.message}`)
+  }
+
+  try {
+    execFileSync('/usr/bin/codesign', ['--verify', updater], { stdio: 'ignore' })
+    return
+  } catch {
+    // Unsigned or invalid helper. Apply a local ad-hoc signature so Gatekeeper
+    // does not block the staged updater before it can run.
+  }
+
+  try {
+    execFileSync('/usr/bin/codesign', ['--force', '--sign', '-', updater], { stdio: 'ignore' })
+    rememberLog('[updates] repaired macOS updater helper signature')
+  } catch (err) {
+    rememberLog(`[updates] macOS updater helper signature repair skipped: ${err.message}`)
+  }
+}
+
 // Path to the venv shim whose lock decides whether `hermes update` can write
 // fresh entry points. On Windows this is the file the running backend
 // `hermes.exe` holds open; on POSIX it's never mandatory-locked.
@@ -1473,6 +1499,7 @@ async function applyUpdates(opts = {}) {
     }
 
     emitUpdateProgress({ stage: 'restart', message: 'Handing off to the Hermes updater…', percent: 100 })
+    repairMacUpdaterHelper(updater)
 
     const updateRoot = resolveUpdateRoot()
     const { branch: configuredBranch } = readDesktopUpdateConfig()
@@ -3467,7 +3494,7 @@ function fetchJsonViaOauthSession(url, options = {}) {
       reject(new Error(`Unsupported Hermes backend URL protocol: ${parsed.protocol}`))
       return
     }
-    const body = options.body === undefined ? undefined : Buffer.from(JSON.stringify(options.body))
+    const body = serializeJsonBody(options.body)
     const timeoutMs = resolveTimeoutMs(options.timeoutMs, DEFAULT_FETCH_TIMEOUT_MS)
 
     const request = electronNet.request({
@@ -3477,8 +3504,7 @@ function fetchJsonViaOauthSession(url, options = {}) {
       useSessionCookies: true,
       redirect: 'follow'
     })
-    request.setHeader('Content-Type', 'application/json')
-    if (body) request.setHeader('Content-Length', String(body.length))
+    setJsonRequestHeaders(request)
 
     let timedOut = false
     const timer = setTimeout(() => {
@@ -3920,6 +3946,16 @@ function profileHasRemoteOverride(profile) {
 function configuredRemoteProfileNames() {
   const config = readDesktopConnectionConfig()
   return Object.keys(config.profiles || {}).filter(name => profileRemoteOverride(config, name))
+}
+
+// True when the app is in app-global remote mode (Settings → "All profiles" →
+// Remote, or the env override): a SINGLE remote backend serves every profile via
+// ?profile=. Distinct from per-profile overrides — here there's one host for all.
+function globalRemoteActive() {
+  if (process.env.HERMES_DESKTOP_REMOTE_URL) {
+    return true
+  }
+  return readDesktopConnectionConfig().mode === 'remote'
 }
 
 // GET a profile's resolved backend (remote pool or local primary), parsed JSON.
@@ -4762,19 +4798,35 @@ async function interceptSessionRequestForRemote(request) {
   }
 
   // Per-session read/mutation. Owner is in ?profile= (reads) or request.profile
-  // (mutations); route to the remote sans profile param — it serves its own
-  // state.db, with no cross-profile semantics.
+  // (mutations). Two remote shapes:
+  //  - per-profile override: route to that profile's own remote, sans profile
+  //    param (it serves its own state.db natively).
+  //  - global remote mode: ONE backend serves every profile via ?profile=, so
+  //    route there and KEEP the profile param so it opens the right state.db.
   if (/^\/api\/sessions\/[^/]+(\/messages)?$/.test(pathname)) {
     const profile = (searchParams.get('profile') || request.profile || '').trim()
-    if (!profile || !profileHasRemoteOverride(profile)) {
+    if (!profile) {
       return undefined
     }
-    if (method === 'GET') {
-      return fetchJsonForProfile(profile, pathname)
+    if (profileHasRemoteOverride(profile)) {
+      if (method === 'GET') {
+        return fetchJsonForProfile(profile, pathname)
+      }
+      const body = request.body && typeof request.body === 'object' ? { ...request.body } : request.body
+      if (body) delete body.profile
+      return requestJsonForProfile(profile, pathname, method, body)
     }
-    const body = request.body && typeof request.body === 'object' ? { ...request.body } : request.body
-    if (body) delete body.profile
-    return requestJsonForProfile(profile, pathname, method, body)
+    if (globalRemoteActive()) {
+      // Single global backend: keep ?profile= so it opens the right state.db.
+      const sep = pathname.includes('?') ? '&' : '?'
+      const path = `${pathname}${sep}profile=${encodeURIComponent(profile)}`
+      if (method === 'GET') {
+        return fetchJsonForProfile(null, path)
+      }
+      const body = request.body && typeof request.body === 'object' ? { ...request.body, profile } : { profile }
+      return requestJsonForProfile(null, path, method, body)
+    }
+    return undefined
   }
 
   return undefined
