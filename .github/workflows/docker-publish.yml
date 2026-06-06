@@ -1,7 +1,7 @@
 name: Docker Build and Publish
 
 on:
-  # Manual only. builderbox-1 is the primary trusted image publisher;
+  # GitHub CI builds the agent image for both forks (canary + prod). builderbox-1
   # this GitHub workflow remains a backup path and must not race :stable on merge.
   workflow_dispatch:
 
@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   build-and-push:
-    if: github.repository == 'ashneil12/vanilla-hermes-agent-canary'
+    if: (github.repository == 'ashneil12/vanilla-hermes-agent-canary' || github.repository == 'ashneil12/vanilla-hermes-agent')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -45,7 +45,7 @@ jobs:
           file: Dockerfile
           load: true
           platforms: linux/amd64
-          tags: ghcr.io/ashneil12/vanilla-hermes-agent-canary:test
+          tags: ghcr.io/${{ github.repository }}:test
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -55,7 +55,7 @@ jobs:
           sudo chown -R 10000:10000 /tmp/hermes-test
           docker run --rm \
             -v /tmp/hermes-test:/opt/data \
-            ghcr.io/ashneil12/vanilla-hermes-agent-canary:test --help
+            ghcr.io/${{ github.repository }}:test --help
 
       - name: Test dashboard subcommand
         run: |
@@ -63,7 +63,7 @@ jobs:
           sudo chown -R 10000:10000 /tmp/hermes-test
           docker run --rm \
             -v /tmp/hermes-test:/opt/data \
-            ghcr.io/ashneil12/vanilla-hermes-agent-canary:test dashboard --help
+            ghcr.io/${{ github.repository }}:test dashboard --help
 
       # Regression gate: media (image/video/audio) tool wiring must be intact in
       # the freshly built image BEFORE we publish :stable. If an upstream-sync
@@ -78,7 +78,7 @@ jobs:
           # light (cardinal rule #1) while still running the regression gate.
           docker run --rm \
             --entrypoint sh \
-            ghcr.io/ashneil12/vanilla-hermes-agent-canary:test \
+            ghcr.io/${{ github.repository }}:test \
             -lc 'cd /opt/hermes && /usr/local/bin/uv pip install --python /opt/hermes/.venv/bin/python3 -q pytest pytest-timeout && /opt/hermes/.venv/bin/python3 -m pytest tests/tools/test_media_generation_wiring.py -q'
 
 
@@ -106,7 +106,7 @@ jobs:
           push: true
           provenance: false
           platforms: linux/amd64
-          tags: ghcr.io/ashneil12/vanilla-hermes-agent-canary:${{ github.sha }}
+          tags: ghcr.io/${{ github.repository }}:${{ github.sha }}
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha
@@ -127,10 +127,10 @@ jobs:
           provenance: false
           platforms: linux/amd64
           tags: |
-            ghcr.io/ashneil12/vanilla-hermes-agent-canary:latest
-            ghcr.io/ashneil12/vanilla-hermes-agent-canary:stable
-            ghcr.io/ashneil12/vanilla-hermes-agent-canary:${{ github.event.release.tag_name }}
-            ghcr.io/ashneil12/vanilla-hermes-agent-canary:${{ github.sha }}
+            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:stable
+            ghcr.io/${{ github.repository }}:${{ github.event.release.tag_name }}
+            ghcr.io/${{ github.repository }}:${{ github.sha }}
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha
@@ -138,7 +138,7 @@ jobs:
 
   move-floating-tags:
     if: |
-      github.repository == 'ashneil12/vanilla-hermes-agent-canary'
+      (github.repository == 'ashneil12/vanilla-hermes-agent-canary' || github.repository == 'ashneil12/vanilla-hermes-agent')
       && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch')
       && needs.build-and-push.outputs.pushed_sha_tag == 'true'
     needs: build-and-push
@@ -170,7 +170,7 @@ jobs:
         id: latest_check
         run: |
           set -euo pipefail
-          image=ghcr.io/ashneil12/vanilla-hermes-agent-canary
+          image=ghcr.io/${{ github.repository }}
 
           image_json=$(
             docker buildx imagetools inspect "${image}:latest" \
@@ -228,7 +228,7 @@ jobs:
         if: steps.latest_check.outputs.push_floating == 'true'
         run: |
           set -euo pipefail
-          image=ghcr.io/ashneil12/vanilla-hermes-agent-canary
+          image=ghcr.io/${{ github.repository }}
           docker buildx imagetools create \
             --tag "${image}:latest" \
             --tag "${image}:stable" \
