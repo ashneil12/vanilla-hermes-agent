@@ -180,6 +180,59 @@ customizations:
     on_conflict: take-theirs        # we customize NOTHING here now; upstream owns key resolution
     provisioner_note: "When a managed-Venice custom OpenAI-compatible provider is configured, set key_env (not a literal key). No agent code, no streaming-layer patch."
 
+  - id: venice-recommended-surfacing
+    status: live
+    files:
+      - path: apps/desktop/src/app/settings/constants.ts
+        ownership: block                 # PROVIDER_GROUPS: VENICE_ entry at priority 0 (leads Settings -> Keys)
+        on_conflict: keep-ours
+      - path: apps/desktop/src/components/desktop-onboarding-overlay.tsx
+        ownership: block                 # API_KEY_OPTIONS venice entry + VeniceRecommendedCard + FeaturedProviderRow hideRecommendedBadge prop
+        on_conflict: keep-ours
+      - path: apps/desktop/src/components/desktop-onboarding-overlay.test.tsx
+        ownership: merge-careful         # the "Recommended badge absent" assertion flips: Venice card always holds the slot
+        on_conflict: merge-careful
+      - path: apps/desktop/src/app/settings/providers-settings.tsx
+        ownership: merge-careful         # renders VeniceRecommendedCard atop the OAuth "Connect an account" picker
+        on_conflict: keep-ours
+      - path: apps/desktop/src/types/hermes.ts
+        ownership: merge-careful         # StatusResponse.dashboard_url (additive optional field)
+        on_conflict: merge-careful
+      - path: hermes_cli/web_server.py
+        ownership: merge-careful         # /api/status exposes dashboard_url from HERMES_DASHBOARD_URL (additive key)
+        on_conflict: merge-careful
+    intent: >
+      Make Venice the RECOMMENDED provider across the rich chat and make the
+      managed-Venice service legible + reachable. Managed Venice already works
+      end-to-end on the control plane (managed-webui-enable.ts injects
+      HERMES_INFERENCE_PROVIDER=custom + a VENICE_/OPENAI_ proxy key + the
+      /api/managed-venice/v1 base_url; the agent boots already chatting on it),
+      but the webui->rich-chat migration dropped the front-end surfacing —
+      apps/desktop had ZERO Venice references. This adds:
+        (a) catalog: Venice first in Settings -> Keys (PROVIDER_GROUPS priority 0)
+            and first in the api-key onboarding picker (API_KEY_OPTIONS).
+        (b) RECOMMENDED card: a VeniceRecommendedCard at the top of the OAuth
+            "Connect an account" panel (onboarding Picker + Settings -> Providers
+            OAuthPicker), holding the gold RECOMMENDED badge; Nous's own badge is
+            suppressed via FeaturedProviderRow's hideRecommendedBadge. Venice isn't
+            OAuth, so clicking deep-links to the dashboard managed-Venice enable
+            flow (/dashboard/billing?managedVenice=deposit) — enabling needs Clerk +
+            wallet and can't happen in-agent. The dashboard origin comes from
+            /api/status.dashboard_url (HERMES_DASHBOARD_URL, injected into every
+            agent by hetzner-instance-builders.ts). If absent (local dev), the card
+            falls back to the API-key path so it's never a dead end.
+      No OAuth-catalog change, no provider logic — additive metadata + one
+      additive status field + one read-only UI card.
+    on_conflict: keep-ours
+    follow_up: >
+      VISUAL CHECK on a canary build before merge (card placement, badge swap,
+      click target). Then: (1) Active-provider "Venice (Managed)" badge when the
+      configured base_url matches /api/managed-venice/ (providers-settings + model
+      picker). (2) Confirm VENICE_API_KEY is category 'provider' in the agent env
+      catalog so the Keys card renders even when unset. (3) Managed-Venice enable is
+      gated to backend==='webui' (managed-webui-enable.ts ~340/~656) — fine today
+      (rich-chat agents are still backend='webui'), revisit if that class is renamed.
+
   - id: aeon-delegation-panel
     status: planned
     source_in_webui: "api/aeon.py (writes skills.config.aeon_github_pat / aeon_fork_repo)"
