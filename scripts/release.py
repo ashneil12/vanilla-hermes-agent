@@ -62,6 +62,7 @@ AUTHOR_MAP = {
     "160464144+ashneil12@users.noreply.github.com": "ashneil12",  # fork maintainer (numeric noreply)
     "ashjeff33@gmail.com": "ashneil12",  # fork maintainer (personal email)
     "ops@hermesos.cloud": "ashneil12",  # fork ops automation identity
+    "aeon@hermesos.cloud": "ashneil12",  # aeon bot identity
     "41898282+github-actions[bot]@users.noreply.github.com": "github-actions[bot]",
     "vinoth12940@users.noreply.github.com": "vinoth12940",
     # hermes-fork: 2026-06-03 prod upstream sync — authors flagged by check-attribution
@@ -73,6 +74,9 @@ AUTHOR_MAP = {
     "alaamohanad169@gmail.com": "Spider-Vers",
     "info@aminvakil.com": "aminvakil",
     "nikpolale@gmail.com": "polnikale",
+    # hermes-fork: 2026-06-06 upstream sync (338c07433)
+    "834740219@qq.com": "ViewWay",
+    "naqerl@users.noreply.github.com": "naqerl",  # 2026-06-06 sync
     "harjoth.khara@gmail.com": "harjothkhara",
     "129007007+HeLLGURD@users.noreply.github.com": "HeLLGURD",
     "dirtyren@users.noreply.github.com": "dirtyren",
