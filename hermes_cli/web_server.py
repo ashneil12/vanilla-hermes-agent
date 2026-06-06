@@ -848,6 +848,12 @@ async def get_status():
         "active_sessions": active_sessions,
         "auth_required": auth_required,
         "auth_providers": auth_providers,
+        # HermesOS: the control-plane dashboard origin (injected into every
+        # agent's env as HERMES_DASHBOARD_URL = NEXT_PUBLIC_APP_URL). The rich
+        # chat uses it to deep-link to the managed-Venice enable/deposit flow,
+        # which lives on the dashboard (Clerk + wallet), not in-agent. None when
+        # unset (e.g. local dev) — the UI falls back to the API-key path.
+        "dashboard_url": (os.environ.get("HERMES_DASHBOARD_URL") or "").strip() or None,
     }
 
 

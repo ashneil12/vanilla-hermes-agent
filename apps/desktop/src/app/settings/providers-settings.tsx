@@ -6,7 +6,8 @@ import {
   FeaturedProviderRow,
   KeyProviderRow,
   ProviderRow,
-  sortProviders
+  sortProviders,
+  VeniceRecommendedCard
 } from '@/components/desktop-onboarding-overlay'
 import { Button } from '@/components/ui/button'
 import { listOAuthProviders } from '@/hermes'
@@ -120,7 +121,8 @@ function OAuthPicker({ onWantApiKey, providers }: { onWantApiKey: () => void; pr
         Sign in with a subscription — no API key to copy. Hermes runs the browser sign-in for you, right here in the
         app.
       </p>
-      {featured && <FeaturedProviderRow onSelect={select} provider={featured} />}
+      <VeniceRecommendedCard onWantApiKey={onWantApiKey} />
+      {featured && <FeaturedProviderRow hideRecommendedBadge onSelect={select} provider={featured} />}
       {connected.length > 0 && (
         <>
           <p className="mt-1 px-0.5 text-[length:var(--conversation-caption-font-size)] font-medium text-(--ui-text-tertiary)">
