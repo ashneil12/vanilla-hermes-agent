@@ -75,6 +75,10 @@ AUTHOR_MAP = {
     "info@aminvakil.com": "aminvakil",
     "nikpolale@gmail.com": "polnikale",
     # hermes-fork: 2026-06-06 upstream sync (56236b16e)
+    "yusufalweshdemir@gmail.com": "Dusk1e",
+    "804436395@qq.com": "LaPhilosophie",
+    "266365592+bmoore210@users.noreply.github.com": "bmoore210",
+    "manishbyatroy@gmail.com": "manishbyatroy",
     "chilltulpa@gmail.com": "TheGardenGallery",
     "al@randomsnowflake.me": "randomsnowflake",
     "zakame@zakame.net": "zakame",
@@ -83,6 +87,7 @@ AUTHOR_MAP = {
     "naqerl@users.noreply.github.com": "naqerl",  # 2026-06-06 sync
     "harjoth.khara@gmail.com": "harjothkhara",
     "129007007+HeLLGURD@users.noreply.github.com": "HeLLGURD",
+    "290859878+synapsesx@users.noreply.github.com": "synapsesx",
     "dirtyren@users.noreply.github.com": "dirtyren",
     "zhaolei.vc@bytedance.com": "zhaoleibd",
     "jeffrobodie@gmail.com": "jeffrobodie-glitch",
@@ -1415,6 +1420,8 @@ AUTHOR_MAP = {
     "nicsequenzy@gmail.com": "polnikale",  # PR #35717 (discover Playwright headless_shell browser)
     "wasdhkzk@gmail.com": "whyhkzk",  # PR #32407 (sandbox-mirror inner-container guard; commits authored as whyhkzk + zhukun)
     "leonard@sellem.me": "leonardsellem",  # PR #37405 (desktop WS origin guard on remote/Tailscale binds)
+    "42903577+ohMyJason@users.noreply.github.com": "ohMyJason",  # PR #29810 (discover_models in custom_providers section 4)
+    "singhsanidhya741@gmail.com": "sanidhyasin",  # PR #40403 salvage (model.default_headers for custom OpenAI-compatible providers, #40033)
 }
 
 
