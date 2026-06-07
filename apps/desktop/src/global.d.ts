@@ -32,6 +32,8 @@ declare global {
       readFileDataUrl: (filePath: string) => Promise<string>
       readFileText: (filePath: string) => Promise<HermesReadFileTextResult>
       selectPaths: (options?: HermesSelectPathsOptions) => Promise<string[]>
+      /** Browser-hosted web shim only: upload a File into the agent VM and return its server path. */
+      uploadFile?: (file: File) => Promise<HermesUploadedFile>
       writeClipboard: (text: string) => Promise<boolean>
       saveImageFromUrl: (url: string) => Promise<boolean>
       saveImageBuffer: (data: ArrayBuffer | Uint8Array, ext: string) => Promise<string>
@@ -81,6 +83,10 @@ declare global {
         setBranch: (name: string) => Promise<{ branch: string }>
         onProgress: (callback: (payload: DesktopUpdateProgress) => void) => () => void
       }
+      uninstall: {
+        summary: () => Promise<DesktopUninstallSummary>
+        run: (mode: DesktopUninstallMode) => Promise<DesktopUninstallResult>
+      }
     }
   }
 }
@@ -102,6 +108,30 @@ export interface DesktopVersionInfo {
   nodeVersion: string
   platform: string
   hermesRoot: string
+}
+
+export type DesktopUninstallMode = 'full' | 'gui' | 'lite'
+
+export interface DesktopUninstallSummary {
+  hermes_home: string
+  agent_installed: boolean
+  gui_installed: boolean
+  source_built_artifacts: string[]
+  packaged_app_paths: string[]
+  userdata_dir: string
+  userdata_exists: boolean
+  platform: string
+  running_app_path?: null | string
+  probe?: string
+}
+
+export interface DesktopUninstallResult {
+  ok: boolean
+  mode?: DesktopUninstallMode
+  willRemoveAppBundle?: boolean
+  scriptPath?: string
+  error?: string
+  message?: string
 }
 
 export interface DesktopUpdateCommit {
@@ -378,6 +408,13 @@ export interface HermesPreviewFileChanged {
   id: string
   path: string
   url: string
+}
+
+export interface HermesUploadedFile {
+  path: string
+  name: string
+  size: number
+  mimeType?: string
 }
 
 export interface HermesSelectPathsOptions {

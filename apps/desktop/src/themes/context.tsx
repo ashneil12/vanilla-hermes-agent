@@ -20,7 +20,44 @@ const SKIN_KEY = 'hermes-desktop-theme-v2'
 const MODE_KEY = 'hermes-desktop-mode-v1'
 const RETIRED_SKINS = new Set(['nous-light', 'default', 'gold'])
 
+/**
+ * Dashboard appearance bridge. When this app is embedded as an iframe in the
+ * Hermes dashboard, the dashboard posts {colorScheme: 'light' | 'dark'} on
+ * mount and on every light/dark toggle, and pre-encodes ?theme= on the iframe
+ * URL so the first paint matches. Mirrors WEBUI_DASHBOARD_APPEARANCE_MESSAGE_TYPE
+ * in hermesdeploy/dashboard/src/lib/webui-appearance.ts.
+ */
+const DASHBOARD_APPEARANCE_MESSAGE_TYPE = 'hermes-dashboard:appearance'
+
 export type ThemeMode = 'light' | 'dark' | 'system'
+
+/** Mode hint from the dashboard's `?theme=` query param, when in an iframe. */
+function readDashboardModeFromUrl(): ThemeMode | null {
+  if (typeof window === 'undefined' || window === window.parent) {
+    return null
+  }
+
+  const theme = new URLSearchParams(window.location.search).get('theme')
+
+  if (theme === 'dark') return 'dark'
+  if (theme === 'hermesos-light' || theme === 'light') return 'light'
+
+  return null
+}
+
+export function readInitialMode(): ThemeMode {
+  if (typeof window === 'undefined') {
+    return 'light'
+  }
+
+  const dashboardMode = readDashboardModeFromUrl()
+
+  if (dashboardMode) {
+    return dashboardMode
+  }
+
+  return (window.localStorage.getItem(MODE_KEY) as ThemeMode) ?? 'light'
+}
 
 const INJECTED_FONT_URLS = new Set<string>()
 
@@ -50,7 +87,7 @@ function readStoredSkin(): string | null {
 }
 
 /** Effective skin name: the explicit choice, else the mode-aware default. */
-const resolveSkin = (stored: string | null, mode: 'light' | 'dark'): string =>
+export const resolveSkin = (stored: string | null, mode: 'light' | 'dark'): string =>
   stored ?? MODE_DEFAULT_SKINS[mode]
 
 // ─── Color math (for synthesised light variants of dark-only skins) ────────
@@ -256,7 +293,7 @@ function applyTheme(theme: DesktopTheme, mode: 'light' | 'dark') {
 
 // Boot-time paint to avoid a flash before <ThemeProvider> mounts.
 if (typeof window !== 'undefined') {
-  const mode = (window.localStorage.getItem(MODE_KEY) as ThemeMode) ?? 'light'
+  const mode = readInitialMode()
   const resolved = resolveMode(mode)
   const skin = resolveSkin(readStoredSkin(), resolved)
   applyTheme(deriveTheme(skin, resolved), resolved)
@@ -289,9 +326,7 @@ const ThemeContext = createContext<ThemeContextValue>({
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [storedSkin, setStoredSkin] = useState<string | null>(readStoredSkin)
 
-  const [mode, setModeState] = useState<ThemeMode>(() =>
-    typeof window === 'undefined' ? 'light' : ((window.localStorage.getItem(MODE_KEY) as ThemeMode) ?? 'light')
-  )
+  const [mode, setModeState] = useState<ThemeMode>(readInitialMode)
 
   const systemDark = useMediaQuery('(prefers-color-scheme: dark)')
   const resolvedMode = resolveMode(mode, systemDark)
@@ -313,30 +348,46 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     window.localStorage.setItem(MODE_KEY, next)
   }, [])
 
-  // Shift+X toggles light/dark anywhere outside an editable field.
+  // Dashboard ↔ chat color-mode sync. When the dashboard hosts us in an
+  // iframe and the user toggles its light/dark switch, the dashboard posts
+  // an appearance message; we honor the colorScheme to keep the chat in
+  // step. Only mode syncs — the user's theme/skin pick stays untouched.
   useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      const t = event.target as HTMLElement | null
+    if (typeof window === 'undefined' || window === window.parent) {
+      return
+    }
 
-      const editing =
-        t?.isContentEditable ||
-        t instanceof HTMLInputElement ||
-        t instanceof HTMLTextAreaElement ||
-        t instanceof HTMLSelectElement
+    const onMessage = (event: MessageEvent) => {
+      if (event.source !== window.parent) return
 
-      if (editing || event.repeat || event.altKey || event.ctrlKey || event.metaKey) {
+      const data = event.data as
+        | { type?: unknown; source?: unknown; appearance?: { colorScheme?: unknown } }
+        | null
+        | undefined
+
+      if (
+        !data ||
+        typeof data !== 'object' ||
+        data.type !== DASHBOARD_APPEARANCE_MESSAGE_TYPE ||
+        data.source !== 'hermes-dashboard'
+      ) {
         return
       }
 
-      if (event.shiftKey && event.code === 'KeyX') {
-        setMode(resolvedMode === 'dark' ? 'light' : 'dark')
+      const colorScheme = data.appearance?.colorScheme
+
+      if (colorScheme === 'dark' || colorScheme === 'light') {
+        setMode(colorScheme)
       }
     }
 
-    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('message', onMessage)
 
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [resolvedMode, setMode])
+    return () => window.removeEventListener('message', onMessage)
+  }, [setMode])
+
+  // The light/dark toggle (Shift+X by default) is owned by the keybind runtime
+  // (`appearance.toggleMode`) so it shows up in the hotkey map and is rebindable.
 
   const value = useMemo<ThemeContextValue>(
     () => ({ theme: activeTheme, themeName, mode, resolvedMode, availableThemes: SKIN_LIST, setTheme, setMode }),
