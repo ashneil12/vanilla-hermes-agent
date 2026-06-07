@@ -1565,8 +1565,9 @@ class TestBuildApiKwargs:
         assert "temperature" not in kwargs
 
     def test_kimi_coding_endpoint_sends_max_tokens_and_reasoning(self, agent):
-        """Kimi endpoint should send max_tokens=32000 and the default
-        thinking toggle without pairing it with reasoning_effort."""
+        """Kimi endpoint sends max_tokens=32000. With no reasoning_config it
+        defaults to the thinking toggle (xor contract: never paired with a
+        top-level reasoning_effort)."""
         agent.provider = "kimi-coding"
         agent.base_url = "https://api.kimi.com/coding/v1"
         agent._base_url_lower = agent.base_url.lower()
