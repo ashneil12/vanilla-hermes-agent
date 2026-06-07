@@ -69,7 +69,8 @@ class TestKimiProfileParity:
             provider_profile=get_provider_profile("kimi"),
             reasoning_config=rc,
         )
-        assert profile["extra_body"]["thinking"] == legacy["extra_body"]["thinking"]
+        assert "thinking" not in profile.get("extra_body", {})
+        assert "thinking" not in legacy.get("extra_body", {})
         assert profile["reasoning_effort"] == legacy["reasoning_effort"] == "high"
 
     def test_thinking_disabled(self, transport):
@@ -99,7 +100,9 @@ class TestKimiProfileParity:
             provider_profile=get_provider_profile("kimi"),
             reasoning_config=rc,
         )
-        assert profile["reasoning_effort"] == legacy["reasoning_effort"] == "medium"
+        assert profile["extra_body"]["thinking"] == legacy["extra_body"]["thinking"] == {"type": "enabled"}
+        assert "reasoning_effort" not in profile
+        assert "reasoning_effort" not in legacy
 
 
 class TestOpenRouterProfileParity:

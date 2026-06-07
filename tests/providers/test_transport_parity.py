@@ -87,7 +87,8 @@ class TestKimiParity:
             provider_profile=get_provider_profile("kimi-coding"),
             reasoning_config={"enabled": True, "effort": "high"},
         )
-        assert kw["extra_body"]["thinking"] == {"type": "enabled"}
+        assert "thinking" not in kw.get("extra_body", {})
+        assert kw["reasoning_effort"] == "high"
 
     def test_thinking_disabled(self, transport):
         kw = transport.build_kwargs(
@@ -119,7 +120,8 @@ class TestKimiParity:
             provider_profile=get_provider_profile("kimi-coding"),
             reasoning_config={"enabled": True},
         )
-        assert kw.get("reasoning_effort") == "medium"
+        assert kw["extra_body"]["thinking"] == {"type": "enabled"}
+        assert "reasoning_effort" not in kw
 
 
 class TestOpenRouterParity:

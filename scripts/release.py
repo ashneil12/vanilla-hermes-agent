@@ -75,7 +75,10 @@ AUTHOR_MAP = {
     "info@aminvakil.com": "aminvakil",
     "nikpolale@gmail.com": "polnikale",
     # hermes-fork: 2026-06-06 upstream sync (56236b16e)
+    "chilltulpa@gmail.com": "TheGardenGallery",
     "al@randomsnowflake.me": "randomsnowflake",
+    "zakame@zakame.net": "zakame",
+    "152110621+jiangkoumo@users.noreply.github.com": "jiangkoumo",
     "834740219@qq.com": "ViewWay",
     "naqerl@users.noreply.github.com": "naqerl",  # 2026-06-06 sync
     "harjoth.khara@gmail.com": "harjothkhara",
@@ -1179,6 +1182,7 @@ AUTHOR_MAP = {
     "teknium@hermes-agent": "teknium1",
     "web3blind@gmail.com": "web3blind",
     "ztzheng@163.com": "chengoak",  # PR #17467
+    "zwcf5200@163.com": "zwcf5200",  # PR #38661 (SSH remote cwd fix)
     "24110240104@m.fudan.edu.cn": "YuShu",  # co-author only
     # Debug share upload-time redaction (May 2026)
     "dhuysamen@gmail.com": "GodsBoy",  # PR #19318
