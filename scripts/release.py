@@ -74,9 +74,14 @@ AUTHOR_MAP = {
     "alaamohanad169@gmail.com": "Spider-Vers",
     "info@aminvakil.com": "aminvakil",
     "nikpolale@gmail.com": "polnikale",
+    # hermes-fork: 2026-06-07 upstream sync (c98637723)
+    "enesilhaydin@gmail.com": "enesilhaydin",
     # hermes-fork: 2026-06-06 upstream sync (56236b16e)
     "yusufalweshdemir@gmail.com": "Dusk1e",
     "804436395@qq.com": "LaPhilosophie",
+    "maxmitcham@mac.home": "maxtrigify",
+    "ccook@nvms.com": "ccook1963",
+    "thomas.paquette@gmail.com": "RyTsYdUp",
     "266365592+bmoore210@users.noreply.github.com": "bmoore210",
     "manishbyatroy@gmail.com": "manishbyatroy",
     "chilltulpa@gmail.com": "TheGardenGallery",
