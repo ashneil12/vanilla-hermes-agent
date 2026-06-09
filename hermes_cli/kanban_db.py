@@ -1348,6 +1348,11 @@ def _migrate_add_optional_columns(conn: sqlite3.Connection) -> None:
     _add_column_if_missing(conn, "task_runs", "cost_usd", "cost_usd REAL")
     _add_column_if_missing(conn, "task_runs", "tokens_total", "tokens_total INTEGER")
 
+    # Operator OS mission mode: per-task acceptance criteria for the generic
+    # (non-PR) verifier (Phase 4). NULL on tasks that don't declare AC — those
+    # keep the existing code/PR review-lane behaviour.
+    _add_column_if_missing(conn, "tasks", "acceptance_criteria", "acceptance_criteria TEXT")
+
     if "model_override" not in cols:
         conn.execute("ALTER TABLE tasks ADD COLUMN model_override TEXT")
 
@@ -5325,12 +5330,20 @@ def dispatch_once(
         # Persist the resolved workspace path so the worker can cd there.
         set_workspace_path(conn, claimed.id, str(workspace))
         _maybe_emit_scratch_tip(conn, claimed.id, claimed.workspace_kind)
-        # Force-load sdlc-review skill for review agents.  The
-        # _default_spawn function already auto-loads kanban-worker, and
-        # appends task.skills via --skills.  Setting task.skills here
-        # means the review agent gets both kanban-worker (lifecycle)
-        # and sdlc-review (review logic: AC verification, merge, etc.).
-        claimed.skills = ["sdlc-review"]
+        # Force-load the verifier skill for review agents. _default_spawn
+        # auto-loads kanban-worker (lifecycle); we append the review logic here.
+        # Operator OS mission mode (Phase 4): a task that declares
+        # acceptance_criteria gets the GENERIC verifier (verify-acceptance — runs
+        # the AC and gates {pass|fail}); a code/PR task keeps sdlc-review. The
+        # column is read directly so this works without a Task-dataclass change.
+        _ac_row = conn.execute(
+            "SELECT acceptance_criteria FROM tasks WHERE id = ?", (claimed.id,)
+        ).fetchone()
+        _ac = _ac_row[0] if _ac_row else None
+        if _ac and str(_ac).strip():
+            claimed.skills = ["verify-acceptance"]
+        else:
+            claimed.skills = ["sdlc-review"]
         _spawn = spawn_fn if spawn_fn is not None else _default_spawn
         try:
             import inspect

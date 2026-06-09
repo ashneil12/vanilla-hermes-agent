@@ -166,6 +166,52 @@ def decide_tick(
 
 
 # --------------------------------------------------------------------------- #
+# Verification gates (Phase 4) — pure. The verifier AGENT runs the criteria;
+# these parse its verdict, pin merges to a SHA, and compute the DONE conjunction.
+# --------------------------------------------------------------------------- #
+def verifier_gate_from_metadata(metadata: Any) -> Optional[bool]:
+    """Parse a verifier run's ``{"gate": "pass"|"fail"}`` verdict.
+
+    Accepts a dict or a JSON string (``task_runs.metadata`` is TEXT). Returns
+    True (pass), False (fail), or None (no verdict — treat as not-yet-verified,
+    NOT as a pass).
+    """
+    if metadata is None:
+        return None
+    if isinstance(metadata, str):
+        try:
+            metadata = json.loads(metadata)
+        except (TypeError, ValueError):
+            return None
+    if not isinstance(metadata, dict):
+        return None
+    gate = str(metadata.get("gate", "")).strip().lower()
+    if gate == "pass":
+        return True
+    if gate == "fail":
+        return False
+    return None
+
+
+def head_sha_unchanged(approved_sha: Optional[str], current_sha: Optional[str]) -> bool:
+    """Recheck-before-merge: an approval only counts for the EXACT commit it was
+    given. Any new push (current != approved) invalidates it and forces re-review.
+    Missing either SHA fails closed (do not merge)."""
+    if not approved_sha or not current_sha:
+        return False
+    return approved_sha == current_sha
+
+
+def mission_done(judge_done: bool, child_gates: Any, final_gate: bool) -> bool:
+    """Termination is a CONJUNCTION, never just 'out of obvious moves':
+    the goal judge says DONE **and** every child verifier gate passed **and**
+    the final whole-mission verifier passed. A missing/None child gate is NOT a
+    pass — it blocks completion."""
+    gates = list(child_gates or [])
+    return bool(judge_done) and all(g is True for g in gates) and bool(final_gate)
+
+
+# --------------------------------------------------------------------------- #
 # Registry (SessionDB-backed by default; store is injectable for tests)
 # --------------------------------------------------------------------------- #
 class _SessionDBStore:
@@ -274,6 +320,9 @@ __all__ = [
     "format_board_digest",
     "is_no_progress",
     "decide_tick",
+    "verifier_gate_from_metadata",
+    "head_sha_unchanged",
+    "mission_done",
     "save_mission",
     "load_mission",
     "list_active_mission_ids",
