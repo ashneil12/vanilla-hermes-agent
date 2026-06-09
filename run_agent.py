@@ -557,6 +557,9 @@ class AIAgent:
         self.session_estimated_cost_usd = 0.0
         self.session_cost_status = "unknown"
         self.session_cost_source = "none"
+        # Operator OS mission mode: per-session spend ceiling. Rebuilt lazily
+        # from mission.cost config on the next turn (see conversation_loop).
+        self.cost_budget = None
         
         # Turn counter (added after reset_session_state was first written — #2635)
         self._user_turn_count = 0

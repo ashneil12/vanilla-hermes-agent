@@ -360,6 +360,17 @@ def run_conversation(
     # They are initialized in __init__ and must persist across run_conversation
     # calls so that nudge logic accumulates correctly in CLI mode.
     agent.iteration_budget = IterationBudget(agent.max_iterations)
+    # Operator OS mission mode: construct the per-session spend ceiling once
+    # (default-disabled). Spend is read live from the agent.session_* counters
+    # in the loop; this object only holds the ceilings from mission.cost config.
+    if getattr(agent, "cost_budget", None) is None:
+        from agent.cost_budget import CostBudget
+        try:
+            from hermes_cli.config import load_config, cfg_get
+            _mission_cost_cfg = cfg_get(load_config(), "mission", "cost", default={}) or {}
+        except Exception:
+            _mission_cost_cfg = {}
+        agent.cost_budget = CostBudget.from_config(_mission_cost_cfg)
 
     # Log conversation turn start for debugging/observability
     _preview_text = _summarize_user_message_for_log(user_message)
@@ -653,6 +664,20 @@ def run_conversation(
                 agent._safe_print("\n⚡ Breaking out of tool loop due to interrupt...")
             break
         
+        # Operator OS mission mode: hard per-session spend ceiling (token-primary,
+        # $-secondary). Default-disabled; the autonomous profile sets ceilings via
+        # mission.cost. A budget stop is a HARD stop (no grace call) — once spend
+        # crosses the ceiling we do not make another paid call.
+        if agent.cost_budget is not None and agent.cost_budget.exceeded(
+            agent.session_total_tokens, agent.session_estimated_cost_usd
+        ):
+            _turn_exit_reason = "cost_budget_exhausted"
+            if not agent.quiet_mode:
+                agent._safe_print(
+                    f"\n⚠️  Cost budget exhausted ({agent.cost_budget.status(agent.session_total_tokens, agent.session_estimated_cost_usd)})"
+                )
+            break
+
         api_call_count += 1
         agent._api_call_count = api_call_count
         agent._touch_activity(f"starting API call #{api_call_count}")

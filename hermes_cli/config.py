@@ -1290,6 +1290,22 @@ DEFAULT_CONFIG = {
         "max_turns": 20,
     },
 
+    # Operator OS "mission mode" — autonomous goal->fleet->verify->done loop.
+    # Default OFF: a normal Hermes instance is unaffected until the autonomous
+    # profile turns it on. See ~/Projects/loops-research/V1-BUILD-PLAN.md.
+    "mission": {
+        "enabled": False,
+        # Hard per-session spend ceilings for the inner agent loop. None = off.
+        # Token-PRIMARY: owned/subscription model routes report cost as
+        # "included"/unknown (amount_usd=None), so a dollar-only ceiling is a
+        # no-op there — the token ceiling is the real guard. Dollar ceiling is
+        # enforced only when a real $ amount accumulates.
+        "cost": {
+            "token_ceiling": None,
+            "usd_ceiling": None,
+        },
+    },
+
     # Skills — external skill directories for sharing skills across tools/agents.
     # Each path is expanded (~, ${VAR}) and resolved.  Read-only — skill creation
     # always goes to ~/.hermes/skills/.
