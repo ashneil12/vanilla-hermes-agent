@@ -1266,7 +1266,7 @@ DEFAULT_CONFIG = {
         #   true             → auto-approve "once" with a logger.warning audit line
         # Flip to true only if you trust delegated work to run dangerous cmds
         # without human review (cron pipelines, batch automation, etc.).
-        "subagent_auto_approve": False,
+        "subagent_auto_approve": True,  # Operator OS: autonomous fan-out (hardline floor still applies)
     },
 
     # Ephemeral prefill messages file — JSON list of {role, content} dicts
@@ -1294,23 +1294,29 @@ DEFAULT_CONFIG = {
     # Default OFF: a normal Hermes instance is unaffected until the autonomous
     # profile turns it on. See ~/Projects/loops-research/V1-BUILD-PLAN.md.
     "mission": {
-        "enabled": False,
-        # Planning gate: when True, auto-decompose parks the proposed DAG in
-        # 'plan_review' and escalates for one human /approve before anything
-        # dispatches. False = current behaviour (triage -> todo, hands-off).
-        "planning_gate": False,
+        # Operator OS ships mission mode ON by default — this fork IS the
+        # autonomous business agent, not a vanilla assistant. (The non-bypassable
+        # hardline floor in tools/approval.py still blocks rm -rf / etc.)
+        "enabled": True,
+        # Planning gate ON: auto-decompose parks the proposed DAG in 'plan_review'
+        # and escalates for ONE human /approve, then runs hands-off. Set False for
+        # fully unattended (no approval) operation.
+        "planning_gate": True,
         # Hard per-session spend ceilings for the inner agent loop. None = off.
         # Token-PRIMARY: owned/subscription model routes report cost as
         # "included"/unknown (amount_usd=None), so a dollar-only ceiling is a
         # no-op there — the token ceiling is the real guard. Dollar ceiling is
         # enforced only when a real $ amount accumulates.
         "cost": {
-            "token_ceiling": None,
+            # ON by default — generous token-primary safety nets (a normal chat
+            # uses far fewer, so these only catch runaways). Tune on canary once
+            # pre-flight V3 confirms whether the model route reports real $ or
+            # "included". usd ceilings stay None until that's known.
+            "token_ceiling": 2000000,
             "usd_ceiling": None,
-            # FLEET-scale (board) ceilings — summed across all worker run rows
-            # by dispatch_once, which halts NEW spawns when crossed. None = off.
-            # Token-primary, same rationale as the per-loop ceilings above.
-            "board_token_ceiling": None,
+            # FLEET-scale (board) ceiling — summed across all worker run rows by
+            # dispatch_once, which halts NEW spawns when crossed. Token-primary.
+            "board_token_ceiling": 8000000,
             "board_usd_ceiling": None,
         },
     },
@@ -1473,9 +1479,14 @@ DEFAULT_CONFIG = {
     #   deny    — block the command and let the agent find another way (default, safe)
     #   approve — auto-approve all dangerous commands in cron jobs
     "approvals": {
-        "mode": "manual",
+        # Operator OS default: smart guardian (aux-LLM auto-approves low-risk,
+        # escalates high-risk) instead of prompting on every command — this is an
+        # autonomous agent. The non-bypassable hardline floor still blocks the
+        # truly destructive set. Set "manual" to restore per-command prompts.
+        "mode": "smart",
         "timeout": 60,
-        "cron_mode": "deny",
+        # Scheduled (cron) missions auto-approve so they don't wedge unattended.
+        "cron_mode": "approve",
         # When true, /reload-mcp asks the user to confirm before rebuilding
         # the MCP tool set for the active session.  Reloading invalidates
         # the provider prompt cache (tool schemas are baked into the system
