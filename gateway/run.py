@@ -5517,6 +5517,27 @@ class GatewayRunner:
                             bad_ticks,
                         )
                         last_warn_at = now
+                        # Operator OS mission mode: route the stuck signal to a
+                        # human, not just the log (gap #6). Best-effort; the
+                        # 300s rate-limit above bounds frequency.
+                        try:
+                            from agent.escalation_router import (
+                                EscalationRouter,
+                                DISPATCHER_STUCK,
+                            )
+                            EscalationRouter().escalate(
+                                DISPATCHER_STUCK,
+                                detail=(
+                                    f"ready queue non-empty for {bad_ticks} ticks, "
+                                    f"0 workers spawned — check profile health / "
+                                    f"`hermes kanban list --status ready`"
+                                ),
+                                key="dispatcher",
+                            )
+                        except Exception:
+                            logger.debug(
+                                "escalation router unavailable", exc_info=True
+                            )
             except asyncio.CancelledError:
                 logger.debug("kanban dispatcher: cancelled")
                 raise

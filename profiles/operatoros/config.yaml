@@ -1,0 +1,42 @@
+# Operator OS — autonomous profile (the assembled "permissionless" preset).
+#
+# This is the one deliberate profile that turns the mission-mode parts ON. A
+# normal Hermes instance leaves all of these at their safe defaults (mission
+# off, no ceilings, manual approvals) — only this profile opts in.
+#
+# The non-bypassable hardline floor (rm -rf /, mkfs, fork bomb, …) in
+# tools/approval.py still blocks unconditionally, even here. "Permissionless"
+# means the guardrails moved OUT of the per-action prompt and INTO the control
+# flow (sandbox + allowlist + budget + escalate-only-on-blocked), not "anything
+# goes".
+
+approvals:
+  # Aux-LLM guardian decides approve / deny / escalate per action instead of
+  # prompting a human each time. Escalations route through the escalation
+  # router (ntfy / send_message). Hardline floor is checked BEFORE this.
+  mode: smart
+  # Cron/headless sessions auto-approve (they have no human to prompt).
+  cron_mode: approve
+
+delegation:
+  # Sub-agents inherit autonomous approval instead of auto-denying.
+  subagent_auto_approve: true
+
+mission:
+  enabled: true
+  cost:
+    # PLACEHOLDERS — tune on canary after pre-flight V3 decides token-vs-$.
+    # Token-PRIMARY: owned/subscription routes report $ as included/None, so the
+    # token ceilings are the real guard. Per-loop bounds one agent; board bounds
+    # the whole fleet (summed across worker run rows by dispatch_once).
+    token_ceiling: 2000000
+    usd_ceiling: null
+    board_token_ceiling: 8000000
+    board_usd_ceiling: null
+
+# Auto-allowed commands (scoped). Everything not allowed and not hardline is
+# evaluated by the smart guardian; genuinely-blocked actions escalate. Keep this
+# conservative — it is the blast-radius control for unattended runs.
+# Examples to add once validated on canary: test/build/lint runners, git
+# add/commit/branch/push to the worker's OWN feature branch (never main/force).
+command_allowlist: []
