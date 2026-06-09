@@ -5211,6 +5211,16 @@ class GatewayRunner:
             )
             failure_limit = _kb.DEFAULT_FAILURE_LIMIT
 
+        # Operator OS mission mode: FLEET-scale spend cap (board-level). Summed
+        # across run rows by dispatch_once, which halts NEW spawns when crossed.
+        # Read from mission.cost (token-primary; None = off, so a normal board
+        # is unaffected until an autonomous mission sets a ceiling).
+        _mission_cost = (
+            (cfg.get("mission", {}) or {}).get("cost", {}) if isinstance(cfg, dict) else {}
+        ) or {}
+        board_usd_ceiling = _mission_cost.get("board_usd_ceiling")
+        board_token_ceiling = _mission_cost.get("board_token_ceiling")
+
         # Read stale_timeout_seconds — 0 disables stale detection.
         raw_stale = kanban_cfg.get("dispatch_stale_timeout_seconds", 0)
         try:
@@ -5292,6 +5302,8 @@ class GatewayRunner:
                     max_in_progress=max_in_progress,
                     failure_limit=failure_limit,
                     stale_timeout_seconds=stale_timeout_seconds,
+                    board_usd_ceiling=board_usd_ceiling,
+                    board_token_ceiling=board_token_ceiling,
                 )
             except sqlite3.DatabaseError as exc:
                 if _is_corrupt_board_db_error(exc):

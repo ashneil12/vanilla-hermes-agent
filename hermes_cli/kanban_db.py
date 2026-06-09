@@ -1342,6 +1342,12 @@ def _migrate_add_optional_columns(conn: sqlite3.Connection) -> None:
         # they were getting before the column existed).
         _add_column_if_missing(conn, "tasks", "max_retries", "max_retries INTEGER")
 
+    # Operator OS mission mode: per-run spend columns on task_runs, for the
+    # cross-process FLEET cost cap. A single agent loop is bounded by CostBudget;
+    # the board is bounded by SUM-ing these. NULL on legacy / never-costed runs.
+    _add_column_if_missing(conn, "task_runs", "cost_usd", "cost_usd REAL")
+    _add_column_if_missing(conn, "task_runs", "tokens_total", "tokens_total INTEGER")
+
     if "model_override" not in cols:
         conn.execute("ALTER TABLE tasks ADD COLUMN model_override TEXT")
 
@@ -2078,6 +2084,8 @@ def _end_run(
     error: Optional[str] = None,
     metadata: Optional[dict] = None,
     status: Optional[str] = None,
+    cost_usd: Optional[float] = None,
+    tokens_total: Optional[int] = None,
 ) -> Optional[int]:
     """Close the currently-active run for ``task_id`` and clear the pointer.
 
@@ -2104,6 +2112,8 @@ def _end_run(
                error         = ?,
                metadata      = ?,
                ended_at      = ?,
+               cost_usd      = COALESCE(?, cost_usd),
+               tokens_total  = COALESCE(?, tokens_total),
                claim_lock    = NULL,
                claim_expires = NULL,
                worker_pid    = NULL
@@ -2117,6 +2127,8 @@ def _end_run(
             error,
             json.dumps(metadata, ensure_ascii=False) if metadata else None,
             now,
+            cost_usd,
+            tokens_total,
             run_id,
         ),
     )
@@ -2860,6 +2872,8 @@ def complete_task(
     metadata: Optional[dict] = None,
     created_cards: Optional[Iterable[str]] = None,
     expected_run_id: Optional[int] = None,
+    cost_usd: Optional[float] = None,
+    tokens_total: Optional[int] = None,
 ) -> bool:
     """Transition ``running|ready -> done`` and record ``result``.
 
@@ -2957,6 +2971,7 @@ def complete_task(
             outcome="completed", status="done",
             summary=summary if summary is not None else result,
             metadata=metadata,
+            cost_usd=cost_usd, tokens_total=tokens_total,
         )
         # If complete_task was called on a never-claimed task (ready or
         # blocked → done with no run in flight), synthesize a
@@ -4990,6 +5005,42 @@ def has_spawnable_review(conn: sqlite3.Connection) -> bool:
     return False
 
 
+def board_spend(conn: sqlite3.Connection) -> tuple:
+    """Return ``(usd, tokens)`` summed across all run rows on this board.
+
+    The FLEET spend surface (Operator OS mission mode): a single agent loop is
+    bounded by ``CostBudget``; the board is bounded by this sum.
+    """
+    row = conn.execute(
+        "SELECT COALESCE(SUM(cost_usd), 0.0), COALESCE(SUM(tokens_total), 0) "
+        "FROM task_runs"
+    ).fetchone()
+    return (float(row[0] or 0.0), int(row[1] or 0))
+
+
+def board_cost_exceeded(
+    conn: sqlite3.Connection,
+    *,
+    usd_ceiling: Optional[float] = None,
+    token_ceiling: Optional[int] = None,
+) -> bool:
+    """True if the board's summed spend has reached either ceiling.
+
+    Token-PRIMARY: owned/subscription model routes report cost as
+    ``included``/``None`` so ``cost_usd`` stays ~0 — the token ceiling is the
+    real guard there. The LLM never decides this; it's a deterministic SUM
+    against a config ceiling.
+    """
+    if not usd_ceiling and not token_ceiling:
+        return False
+    usd, tokens = board_spend(conn)
+    if usd_ceiling and usd >= usd_ceiling:
+        return True
+    if token_ceiling and tokens >= token_ceiling:
+        return True
+    return False
+
+
 def dispatch_once(
     conn: sqlite3.Connection,
     *,
@@ -4998,6 +5049,8 @@ def dispatch_once(
     dry_run: bool = False,
     max_spawn: Optional[int] = None,
     max_in_progress: Optional[int] = None,
+    board_usd_ceiling: Optional[float] = None,
+    board_token_ceiling: Optional[int] = None,
     failure_limit: int = DEFAULT_SPAWN_FAILURE_LIMIT,
     stale_timeout_seconds: int = 0,
     board: Optional[str] = None,
@@ -5079,6 +5132,15 @@ def dispatch_once(
         result.auto_blocked.extend(_crash_auto_blocked)
     result.timed_out = enforce_max_runtime(conn)
     result.promoted = recompute_ready(conn)
+
+    # Operator OS mission mode: FLEET-scale spend cap. CostBudget bounds a single
+    # loop; this bounds the whole board. When summed run spend crosses the ceiling,
+    # stop spawning NEW workers this tick (running ones finish, then the board
+    # idles). Deterministic SUM vs config ceiling — the LLM never decides it.
+    if board_cost_exceeded(
+        conn, usd_ceiling=board_usd_ceiling, token_ceiling=board_token_ceiling
+    ):
+        return result
 
     # Count tasks already running so max_spawn enforces concurrency rather
     # than a per-tick spawn budget. See the docstring above for the full

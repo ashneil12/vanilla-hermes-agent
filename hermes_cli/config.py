@@ -1303,6 +1303,11 @@ DEFAULT_CONFIG = {
         "cost": {
             "token_ceiling": None,
             "usd_ceiling": None,
+            # FLEET-scale (board) ceilings — summed across all worker run rows
+            # by dispatch_once, which halts NEW spawns when crossed. None = off.
+            # Token-primary, same rationale as the per-loop ceilings above.
+            "board_token_ceiling": None,
+            "board_usd_ceiling": None,
         },
     },
 

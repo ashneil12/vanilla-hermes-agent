@@ -465,6 +465,19 @@ def _handle_complete(args: dict, **kw) -> str:
             f"metadata must be an object/dict, got {type(metadata).__name__}"
         )
     metadata = _stamp_worker_session_metadata(tid, metadata)
+    # Operator OS mission mode: best-effort capture of this worker's spend so the
+    # dispatcher's FLEET cost cap (board_cost_exceeded) can sum it across runs.
+    # Prefer explicit args; else read the running agent's session counters if the
+    # tool runtime exposes the agent. Degrades safely to None (cap just lacks data).
+    cost_usd = args.get("cost_usd")
+    tokens_total = args.get("tokens_total")
+    if cost_usd is None or tokens_total is None:
+        _ag = kw.get("agent") or kw.get("ai_agent")
+        if _ag is not None:
+            if cost_usd is None:
+                cost_usd = getattr(_ag, "session_estimated_cost_usd", None)
+            if tokens_total is None:
+                tokens_total = getattr(_ag, "session_total_tokens", None)
     board = args.get("board")
     try:
         kb, conn = _connect(board=board)
@@ -475,6 +488,7 @@ def _handle_complete(args: dict, **kw) -> str:
                     result=result, summary=summary, metadata=metadata,
                     created_cards=created_cards,
                     expected_run_id=_worker_run_id(tid),
+                    cost_usd=cost_usd, tokens_total=tokens_total,
                 )
             except kb.HallucinatedCardsError as hall_err:
                 # Structured rejection — surface the phantom ids so the
