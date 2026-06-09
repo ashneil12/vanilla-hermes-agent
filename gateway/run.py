@@ -5570,6 +5570,32 @@ class GatewayRunner:
                             continue
                         if outcome.ok:
                             successes += 1
+                            # Operator OS planning gate (Phase 5): park the
+                            # proposed DAG in plan_review and escalate for ONE
+                            # human approval before anything dispatches. Off by
+                            # default (mission.planning_gate=False).
+                            if (cfg.get("mission", {}) or {}).get("planning_gate", False):
+                                try:
+                                    _pconn = _kb.connect(board=slug)
+                                    _parked = _kb.park_plan(_pconn, tid)
+                                    _pconn.commit()
+                                    from agent.escalation_router import (
+                                        EscalationRouter,
+                                        PLAN_APPROVAL,
+                                    )
+                                    EscalationRouter().escalate(
+                                        PLAN_APPROVAL,
+                                        detail=(
+                                            f"proposed plan for {tid}: {_parked} task(s) "
+                                            f"parked in plan_review — approve to start "
+                                            f"(kanban_db.approve_plan / `hermes kanban approve-plan {tid}`)"
+                                        ),
+                                        key=tid,
+                                    )
+                                except Exception:
+                                    logger.exception(
+                                        "planning gate: park/escalate failed for %s", tid
+                                    )
                             if outcome.fanout and outcome.child_ids:
                                 logger.info(
                                     "kanban auto-decompose [%s]: %s → %d children",

@@ -96,7 +96,7 @@ _log = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-VALID_STATUSES = {"triage", "todo", "scheduled", "ready", "running", "blocked", "review", "done", "archived"}
+VALID_STATUSES = {"triage", "plan_review", "todo", "scheduled", "ready", "running", "blocked", "review", "done", "archived"}
 VALID_INITIAL_STATUSES = {"running", "blocked"}
 VALID_WORKSPACE_KINDS = {"scratch", "worktree", "dir"}
 KNOWN_TOOLSET_NAMES = frozenset(name.casefold() for name in get_toolset_names())
@@ -5008,6 +5008,57 @@ def has_spawnable_review(conn: sqlite3.Connection) -> bool:
         if profile_exists(row["assignee"]):
             return True
     return False
+
+
+def _dag_ids(conn: sqlite3.Connection, root_id: str) -> set:
+    """Root + all descendants reachable via ``task_links`` (parent_id->child_id)."""
+    seen: set = set()
+    frontier = [root_id]
+    while frontier:
+        pid = frontier.pop()
+        if pid in seen:
+            continue
+        seen.add(pid)
+        for row in conn.execute(
+            "SELECT child_id FROM task_links WHERE parent_id = ?", (pid,)
+        ):
+            child = row[0]
+            if child not in seen:
+                frontier.append(child)
+    return seen
+
+
+def park_plan(conn: sqlite3.Connection, root_id: str) -> int:
+    """Operator OS planning gate: move a freshly-decomposed DAG (root +
+    descendants) from ``todo`` -> ``plan_review`` so NOTHING dispatches until a
+    human approves. Only flips tasks currently in ``todo`` (idempotent).
+    Returns the number of tasks parked. Parking the root alone already holds the
+    DAG (children can't promote past a non-done parent), but we park the whole
+    tree so the proposed plan is visibly staged for review."""
+    n = 0
+    for tid in _dag_ids(conn, root_id):
+        n += conn.execute(
+            "UPDATE tasks SET status = 'plan_review' WHERE id = ? AND status = 'todo'",
+            (tid,),
+        ).rowcount
+    return n
+
+
+def approve_plan(conn: sqlite3.Connection, root_id: str) -> int:
+    """Approve a parked plan: flip the DAG ``plan_review`` -> ``todo`` so it
+    dispatches. Guarded ``WHERE status='plan_review'`` (idempotent; only affects
+    parked tasks). Returns the number of tasks promoted."""
+    n = 0
+    for tid in _dag_ids(conn, root_id):
+        n += conn.execute(
+            "UPDATE tasks SET status = 'todo' WHERE id = ? AND status = 'plan_review'",
+            (tid,),
+        ).rowcount
+    try:
+        _append_event(conn, root_id, "plan_approved", {"promoted": n})
+    except Exception:
+        pass
+    return n
 
 
 def board_spend(conn: sqlite3.Connection) -> tuple:

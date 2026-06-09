@@ -1295,6 +1295,10 @@ DEFAULT_CONFIG = {
     # profile turns it on. See ~/Projects/loops-research/V1-BUILD-PLAN.md.
     "mission": {
         "enabled": False,
+        # Planning gate: when True, auto-decompose parks the proposed DAG in
+        # 'plan_review' and escalates for one human /approve before anything
+        # dispatches. False = current behaviour (triage -> todo, hands-off).
+        "planning_gate": False,
         # Hard per-session spend ceilings for the inner agent loop. None = off.
         # Token-PRIMARY: owned/subscription model routes report cost as
         # "included"/unknown (amount_usd=None), so a dollar-only ceiling is a
