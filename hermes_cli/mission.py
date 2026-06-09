@@ -84,6 +84,43 @@ def is_no_progress(
     return all(fp == tail[0] for fp in tail)
 
 
+def format_board_digest(
+    counts: Dict[str, int],
+    leaf_tasks: Optional[List[Dict[str, Any]]] = None,
+    *,
+    max_chars: int = 1500,
+) -> str:
+    """Bounded, judge-readable board digest (gap #2 serializer).
+
+    Lane counts + a completion ratio + a few OUTSTANDING leaf tasks (blocked
+    first — the judge cares most about those), capped at ``max_chars`` so a
+    50-task board still fits the aux judge's context budget.
+    """
+    counts = counts or {}
+    lane_order = [
+        "triage", "todo", "scheduled", "ready", "running",
+        "review", "blocked", "done", "archived",
+    ]
+    lane_line = ", ".join(f"{k}={counts[k]}" for k in lane_order if counts.get(k))
+    total = sum(counts.values())
+    done = counts.get("done", 0) + counts.get("archived", 0)
+    parts = [
+        f"lanes: {lane_line or 'empty'}",
+        f"completion: {done}/{total} tasks done",
+    ]
+
+    def _rank(t: Dict[str, Any]) -> int:
+        return 0 if t.get("status") == "blocked" else 1
+
+    for t in sorted(leaf_tasks or [], key=_rank):
+        line = f"- [{t.get('status', '?')}] {t.get('id', '?')}: {t.get('title', '')}"
+        if len("\n".join(parts)) + len(line) + 1 > max_chars:
+            parts.append("- ... (truncated)")
+            break
+        parts.append(line)
+    return "\n".join(parts)
+
+
 # --------------------------------------------------------------------------- #
 # Supervisor tick decision — pure, deterministic. The LLM decides NONE of this.
 # --------------------------------------------------------------------------- #
@@ -234,6 +271,7 @@ __all__ = [
     "Mission",
     "TickDecision",
     "board_fingerprint",
+    "format_board_digest",
     "is_no_progress",
     "decide_tick",
     "save_mission",

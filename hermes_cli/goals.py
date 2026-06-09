@@ -374,6 +374,7 @@ def judge_goal(
     *,
     timeout: float = DEFAULT_JUDGE_TIMEOUT,
     subgoals: Optional[List[str]] = None,
+    board_state: Optional[str] = None,
 ) -> Tuple[str, str, bool]:
     """Ask the auxiliary model whether the goal is satisfied.
 
@@ -434,6 +435,18 @@ def judge_goal(
             goal=_truncate(goal, 2000),
             response=_truncate(last_response, _JUDGE_RESPONSE_SNIPPET_CHARS),
             current_time=current_time,
+        )
+
+    if board_state and board_state.strip():
+        # Operator OS mission mode: judge BOARD completion, not just the last
+        # chat message (gap #2). Appended (not templated) so behavior is
+        # byte-identical to the original judge when no board is provided.
+        prompt = (
+            prompt
+            + "\n\nKANBAN BOARD STATE (the work actually dispatched for this "
+            "goal; judge DONE only if the board shows the goal's work complete, "
+            "not merely because the last message sounds finished):\n"
+            + _truncate(board_state, 2000)
         )
 
     try:
@@ -622,6 +635,7 @@ class GoalManager:
         last_response: str,
         *,
         user_initiated: bool = True,
+        board_state: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Run the judge and update state. Return a decision dict.
 
@@ -653,7 +667,8 @@ class GoalManager:
         state.last_turn_at = time.time()
 
         verdict, reason, parse_failed = judge_goal(
-            state.goal, last_response, subgoals=state.subgoals or None
+            state.goal, last_response, subgoals=state.subgoals or None,
+            board_state=board_state,
         )
         state.last_verdict = verdict
         state.last_reason = reason

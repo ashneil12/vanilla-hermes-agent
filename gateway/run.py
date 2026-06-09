@@ -4690,6 +4690,36 @@ class GatewayRunner:
                             key=mid,
                         )
                     _m.pause_mission(mission, decision.halt_reason or "halted")
+                    continue
+                # Board-aware completion (Phase 3): when no outstanding work
+                # remains, confirm DONE with the goal judge reading the board
+                # DIGEST (the board is the primary signal; the judge guards
+                # against false-DONE). Otherwise keep going (persist fp growth).
+                outstanding = sum(
+                    counts.get(s, 0)
+                    for s in (
+                        "triage", "todo", "scheduled", "ready", "running",
+                        "review", "blocked",
+                    )
+                )
+                if outstanding == 0 and sum(counts.values()) > 0:
+                    digest = _m.format_board_digest(counts, [])
+                    verdict = "continue"
+                    try:
+                        from hermes_cli.goals import judge_goal, load_goal
+                        gs = load_goal(mission.goal_session_id)
+                        verdict, _r, _pf = judge_goal(
+                            gs.goal if gs else "", digest, board_state=digest
+                        )
+                    except Exception:
+                        logger.debug(
+                            "mission %s: board-aware judge failed", mid, exc_info=True
+                        )
+                    if verdict == "done":
+                        _m.mark_done(mission)
+                        logger.info("mission %s complete (board-aware judge)", mid)
+                    else:
+                        _m.save_mission(mission)
                 else:
                     _m.save_mission(mission)  # persist fp_history growth
             except Exception:
