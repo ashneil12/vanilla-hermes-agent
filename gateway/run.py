@@ -4214,6 +4214,11 @@ class GatewayRunner:
         # turn so the agent kicks off the new chat.
         asyncio.create_task(self._handoff_watcher())
 
+        # Operator OS mission mode: supervisor watcher — ticks active standing
+        # missions (heartbeat + deterministic halt checks + escalation). Gated by
+        # mission.enabled (default False), so a normal instance never starts it.
+        asyncio.create_task(self._mission_supervisor_watcher())
+
         logger.info("Press Ctrl+C to stop")
         
         return True
@@ -4605,6 +4610,90 @@ class GatewayRunner:
             return get_active_profile_name() or "default"
         except Exception:
             return "default"
+
+    async def _mission_supervisor_watcher(self, interval: float = 60.0) -> None:
+        """Tick each active standing mission: heartbeat + deterministic hard-halt
+        checks + escalation. Gated by ``mission.enabled``. Mirrors the kanban
+        dispatcher watcher's lifecycle (run-flag loop, ``asyncio.to_thread`` for
+        SQLite, interruptible sleep). The board-aware DONE re-judge lands in
+        Phase 3.
+        """
+        try:
+            from hermes_cli.config import load_config
+            cfg = load_config()
+        except Exception:
+            cfg = {}
+        mission_cfg = (cfg.get("mission", {}) or {}) if isinstance(cfg, dict) else {}
+        if not mission_cfg.get("enabled", False):
+            return  # opt-in only; a normal instance never runs the supervisor
+        try:
+            interval = float(mission_cfg.get("interval_seconds", 60) or 60)
+        except (TypeError, ValueError):
+            interval = 60.0
+        logger.info("mission supervisor: starting (interval=%.0fs)", interval)
+        await asyncio.sleep(5)  # let the rest of startup settle
+        while self._running:
+            try:
+                await asyncio.to_thread(self._mission_supervisor_tick_once)
+            except asyncio.CancelledError:
+                logger.debug("mission supervisor: cancelled")
+                raise
+            except Exception:
+                logger.exception("mission supervisor: unexpected tick error")
+            slept = 0.0
+            while slept < interval and self._running:
+                await asyncio.sleep(min(1.0, interval - slept))
+                slept += 1.0
+
+    def _mission_supervisor_tick_once(self) -> None:
+        """One supervisor pass (sync; runs in a worker thread).
+
+        Writes the supervisor heartbeat (watched by the dispatcher watchdog),
+        then runs the deterministic halt checks per active mission, escalating +
+        pausing on a hard halt. The kanban dispatcher does the actual fan-out;
+        this only decides whether the mission should keep going. Every branch is
+        wrapped so one bad mission never wedges the supervisor.
+        """
+        from hermes_cli import mission as _m
+        _m.write_supervisor_heartbeat()
+        try:
+            from hermes_cli import kanban_db as _kb
+            from agent.escalation_router import EscalationRouter
+        except Exception:
+            return
+        router = EscalationRouter()
+        for mid in _m.list_active_mission_ids():
+            try:
+                mission = _m.load_mission(mid)
+                if mission is None or mission.status != _m.STATUS_RUNNING:
+                    continue
+                conn = _kb.connect()
+                usd, tokens = _kb.board_spend(conn)
+                counts = {}
+                for status, n in conn.execute(
+                    "SELECT status, COUNT(*) FROM tasks GROUP BY status"
+                ):
+                    counts[status] = n
+                active_agents = int(counts.get("running", 0))
+                decision = _m.decide_tick(
+                    mission,
+                    board_usd_spent=usd,
+                    board_tokens_spent=tokens,
+                    active_agents=active_agents,
+                    new_fingerprint=_m.board_fingerprint(counts),
+                )
+                if decision.action == "halt":
+                    if decision.escalate:
+                        router.escalate(
+                            decision.escalate,
+                            detail=f"mission {mid} halted: {decision.halt_reason}",
+                            key=mid,
+                        )
+                    _m.pause_mission(mission, decision.halt_reason or "halted")
+                else:
+                    _m.save_mission(mission)  # persist fp_history growth
+            except Exception:
+                logger.exception("mission supervisor: error ticking mission %s", mid)
 
     async def _kanban_notifier_watcher(self, interval: float = 5.0) -> None:
         """Poll ``kanban_notify_subs`` and deliver terminal events to users.
@@ -5538,6 +5627,28 @@ class GatewayRunner:
                             logger.debug(
                                 "escalation router unavailable", exc_info=True
                             )
+                # Operator OS: watchdog over the mission supervisor. If its
+                # heartbeat is stale while this (separate) dispatcher task still
+                # ticks, the supervisor likely wedged — page a human. A true
+                # out-of-process watchdog is a cron job; this catches a wedged
+                # supervisor while the gateway process is alive.
+                try:
+                    from hermes_cli import mission as _mission_mod
+                    if _mission_mod.supervisor_heartbeat_stale():
+                        _now_sv = int(time.time())
+                        if _now_sv - getattr(self, "_last_supervisor_warn_at", 0) >= 300:
+                            from agent.escalation_router import (
+                                EscalationRouter,
+                                DISPATCHER_STUCK,
+                            )
+                            EscalationRouter().escalate(
+                                DISPATCHER_STUCK,
+                                detail="mission supervisor heartbeat stale (>10m) — supervisor may be wedged",
+                                key="supervisor",
+                            )
+                            self._last_supervisor_warn_at = _now_sv
+                except Exception:
+                    logger.debug("supervisor watchdog check failed", exc_info=True)
             except asyncio.CancelledError:
                 logger.debug("kanban dispatcher: cancelled")
                 raise
