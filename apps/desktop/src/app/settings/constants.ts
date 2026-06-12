@@ -50,6 +50,26 @@ export const PROVIDER_GROUPS: ProviderPrefix[] = [
     docsUrl: 'https://venice.ai/settings/api',
     priority: 0
   },
+  // HermesOS: Surplus Intelligence — open market for AI inference (routes each
+  // request to the cheapest seller, settles USDC on Base). Plain BYO-key,
+  // OpenAI-compatible; the ``plugins/model-providers/surplus`` profile auto-wires
+  // model discovery, so pasting a SURPLUS_API_KEY here lists its live catalog.
+  {
+    prefix: 'SURPLUS_',
+    name: 'Surplus Intelligence',
+    description: 'Open market for AI inference — routes to the cheapest seller',
+    docsUrl: 'https://www.surplusintelligence.ai/buy',
+    priority: 0
+  },
+  // HermesOS: Bankr — wallet-funded OpenAI-compatible LLM gateway. Usage is
+  // metered against the agent's Bankr wallet rather than a prepaid balance.
+  {
+    prefix: 'BANKR_',
+    name: 'Bankr',
+    description: 'Wallet-funded LLM gateway — pays for inference from your Bankr wallet',
+    docsUrl: 'https://bankr.bot',
+    priority: 1
+  },
   {
     prefix: 'NOUS_',
     name: 'Nous Portal',
