@@ -31,6 +31,7 @@ from agent.prompt_builder import (
     GOOGLE_MODEL_OPERATIONAL_GUIDANCE,
     HERMES_AGENT_HELP_GUIDANCE,
     KANBAN_GUIDANCE,
+    MEDIA_GENERATION_GUIDANCE,
     MEMORY_GUIDANCE,
     OPENAI_MODEL_EXECUTION_GUIDANCE,
     PLATFORM_HINTS,
@@ -102,6 +103,13 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     # Pointer to the hermes-agent skill + docs for user questions about Hermes itself.
     stable_parts.append(HERMES_AGENT_HELP_GUIDANCE)
 
+    # HermesOS customization: Bankr wallet guidance (empty/no-op unless the
+    # dashboard provisioned the wallet env). Resolved through _r so the
+    # re-exported run_agent symbol is honored.
+    bankr_wallet_prompt = _r.build_bankr_wallet_prompt()
+    if bankr_wallet_prompt:
+        stable_parts.append(bankr_wallet_prompt)
+
     # Universal task-completion / no-fabrication guidance.  Applied to ALL
     # models regardless of tool_use_enforcement gating — the failure modes
     # this targets (stopping after a stub; fabricating output when a real
@@ -119,6 +127,10 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         tool_guidance.append(SESSION_SEARCH_GUIDANCE)
     if "skill_manage" in agent.valid_tool_names:
         tool_guidance.append(SKILLS_GUIDANCE)
+    # HermesOS customization: steer media requests to the hosted generation
+    # tools when any of them are loaded.
+    if any(t in agent.valid_tool_names for t in ("image_generate", "video_generate", "audio_generate")):
+        tool_guidance.append(MEDIA_GENERATION_GUIDANCE)
     # Kanban worker/orchestrator lifecycle — only present when the
     # dispatcher spawned this process (kanban_show check_fn gates on
     # HERMES_KANBAN_TASK env var). Normal chat sessions never see

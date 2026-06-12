@@ -684,6 +684,13 @@ class ManagedFileDelete(BaseModel):
     recursive: bool = False
 
 
+# HermesOS: payload for POST /api/attachments/upload (rich-chat file upload).
+class WebAttachmentUploadRequest(BaseModel):
+    data_url: str
+    name: Optional[str] = None
+    mime_type: Optional[str] = None
+
+
 _AUDIO_MIME_EXTENSIONS: Dict[str, str] = {
     "audio/aac": ".aac",
     "audio/flac": ".flac",
@@ -700,11 +707,48 @@ _AUDIO_MIME_EXTENSIONS: Dict[str, str] = {
     "video/webm": ".webm",
 }
 _MAX_TRANSCRIPTION_UPLOAD_BYTES = 25 * 1024 * 1024
+# HermesOS: rich-chat attachment upload (POST /api/attachments/upload).
+_MAX_WEB_ATTACHMENT_UPLOAD_BYTES = 50 * 1024 * 1024
+_UPLOAD_FILENAME_SAFE_RE = re.compile(r"[^A-Za-z0-9._ -]+")
 
 
 def _audio_extension_for_mime(mime_type: str) -> str:
     normalized = (mime_type or "").split(";", 1)[0].strip().lower()
     return _AUDIO_MIME_EXTENSIONS.get(normalized, ".webm")
+
+
+# HermesOS: sanitize a client-supplied attachment filename to a safe basename.
+def _safe_upload_filename(name: str | None, mime_type: str) -> str:
+    raw = (name or "upload").replace("\\", "/")
+    base = Path(raw).name.strip() or "upload"
+    base = _UPLOAD_FILENAME_SAFE_RE.sub("_", base).strip(" .") or "upload"
+    base = base[:120].strip(" .") or "upload"
+    if "." not in base:
+        guessed = mimetypes.guess_extension(mime_type.split(";", 1)[0].strip().lower())
+        if guessed:
+            base = f"{base}{guessed}"
+    return base
+
+
+# HermesOS: decode a ``data:<mime>;base64,<...>`` URL into (mime, bytes).
+def _decode_base64_data_url(data_url: str, fallback_mime_type: str) -> tuple[str, bytes]:
+    data_url = (data_url or "").strip()
+    if not data_url.startswith("data:") or "," not in data_url:
+        raise HTTPException(status_code=400, detail="Invalid attachment payload")
+
+    header, encoded = data_url.split(",", 1)
+    if ";base64" not in header:
+        raise HTTPException(
+            status_code=400, detail="Attachment payload must be base64 encoded"
+        )
+
+    mime_type = (fallback_mime_type or header[5:].split(";", 1)[0] or "application/octet-stream").strip()
+    try:
+        payload = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(status_code=400, detail="Attachment payload is not valid base64")
+
+    return mime_type, payload
 
 
 class ModelAssignment(BaseModel):
@@ -802,6 +846,31 @@ def _normalize_main_model_assignment(provider: str, model: str) -> tuple[str, st
     return prov_in, model_in
 
 
+# HermesOS: resolve the canonical inference endpoint of a registered provider
+# profile (BYOK marketplace providers like Surplus declare their own host).
+def _provider_profile_base_url(provider: str) -> str:
+    """Return the canonical ``base_url`` of a registered provider profile.
+
+    BYOK marketplace providers (e.g. ``surplus``) declare their own inference
+    endpoint via a :class:`ProviderProfile`. When a main-model switch lands on
+    such a provider with no explicit ``base_url``, we must write that endpoint
+    into config — otherwise the runtime falls back to the OpenAI default host
+    and the provider's key is sent to the wrong server.
+
+    Returns the trimmed profile ``base_url`` (no trailing slash), or ``""`` when
+    the provider has no profile, no ``base_url``, or anything goes wrong.
+    """
+    try:
+        from providers import get_provider_profile
+
+        prof = get_provider_profile(provider)
+        if prof is not None and getattr(prof, "base_url", None):
+            return str(prof.base_url).strip().rstrip("/")
+    except Exception:
+        pass
+    return ""
+
+
 def _apply_main_model_assignment(
     model_cfg: "Any", provider: str, model: str, base_url: str = "", api_key: str = ""
 ) -> dict:
@@ -838,11 +907,15 @@ def _apply_main_model_assignment(
     model_cfg["default"] = model
     if base_url.strip():
         model_cfg["base_url"] = base_url.strip()
-    elif model_cfg.get("base_url") and new_provider != prev_provider:
-        # Switching providers: the old URL belonged to the old provider, drop
-        # it so the new provider's default endpoint is used. Same-provider
-        # re-assignment keeps the user's configured base_url intact.
-        model_cfg["base_url"] = ""
+    elif new_provider != prev_provider:
+        # HermesOS: switching providers with no explicit URL — adopt the new
+        # provider's canonical endpoint from its registered profile so BYOK
+        # marketplace providers like Surplus keep routing to their own host
+        # (the OpenAI default would send their key to the wrong server). Falls
+        # back to "" (registry default) when the provider declares no profile
+        # base_url. Same-provider re-assignment keeps the user's configured
+        # base_url intact (e.g. a Xiaomi MiMo Token Plan host).
+        model_cfg["base_url"] = _provider_profile_base_url(new_provider)
     # The endpoint key follows the same lifecycle as base_url: an explicit key
     # is always persisted; an existing key is dropped only when switching to a
     # different provider (it belonged to the old endpoint), and preserved on a
@@ -1655,6 +1728,12 @@ async def get_status():
         "active_sessions": active_sessions,
         "auth_required": auth_required,
         "auth_providers": auth_providers,
+        # HermesOS: the control-plane dashboard origin (injected into every
+        # agent's env as HERMES_DASHBOARD_URL = NEXT_PUBLIC_APP_URL). The rich
+        # chat uses it to deep-link to the managed-Venice enable/deposit flow,
+        # which lives on the dashboard (Clerk + wallet), not in-agent. None when
+        # unset (e.g. local dev) — the UI falls back to the API-key path.
+        "dashboard_url": (os.environ.get("HERMES_DASHBOARD_URL") or "").strip() or None,
     }
 
 
@@ -2284,6 +2363,58 @@ async def check_hermes_update(force: bool = False):
             payload["commits"] = await asyncio.to_thread(_recent_upstream_commits)
 
     return payload
+
+
+# HermesOS: rich-chat file/image upload — base64 data-URL in, on-disk path out.
+@app.post("/api/attachments/upload")
+async def upload_web_attachment(payload: WebAttachmentUploadRequest):
+    mime_type, data = _decode_base64_data_url(
+        payload.data_url,
+        (payload.mime_type or "application/octet-stream").strip(),
+    )
+    if not data:
+        raise HTTPException(status_code=400, detail="Attachment is empty")
+    if len(data) > _MAX_WEB_ATTACHMENT_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Attachment is too large")
+
+    safe_name = _safe_upload_filename(payload.name, mime_type)
+    upload_dir = get_hermes_home() / "uploads" / datetime.now(timezone.utc).strftime("%Y%m%d")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(upload_dir, 0o700)
+    except OSError:
+        pass
+
+    stamp = datetime.now(timezone.utc).strftime("%H%M%S")
+    target = upload_dir / f"{stamp}-{secrets.token_hex(4)}-{safe_name}"
+    try:
+        with open(target, "xb") as fh:
+            fh.write(data)
+        os.chmod(target, 0o600)
+    except OSError as exc:
+        _log.exception("Web attachment upload failed")
+        raise HTTPException(status_code=500, detail=f"Could not save attachment: {exc}")
+
+    # Re-own the upload to HERMES_HOME's owner so the agent can read it. In the
+    # webfree split-container deploy this dashboard server runs as root while the
+    # agent that later reads the attachment runs as a non-root uid, both sharing
+    # HERMES_HOME — without this the file is written root:root 0600 and the agent
+    # gets EACCES ("upload worked but the agent can't read the file/image"). On
+    # the desktop app the owner already matches, so this is a harmless no-op.
+    try:
+        _hh_stat = get_hermes_home().stat()
+        os.chown(upload_dir, _hh_stat.st_uid, _hh_stat.st_gid)
+        os.chown(target, _hh_stat.st_uid, _hh_stat.st_gid)
+    except OSError:
+        pass
+
+    return {
+        "ok": True,
+        "path": str(target),
+        "name": safe_name,
+        "size": len(data),
+        "mime_type": mime_type,
+    }
 
 
 @app.post("/api/audio/transcribe")
@@ -3066,7 +3197,16 @@ def get_model_options(profile: Optional[str] = None):
         with _profile_scope(profile):
             return build_models_payload(
                 load_picker_context(),
-                max_models=50,
+                # HermesOS: the settings model dropdown is search-filtered
+                # client-side, so it needs the FULL per-provider catalog — not a
+                # 50-model preview. Marketplace providers (Surplus Intelligence)
+                # expose 200+ models; capping at 50 hid everything past index 50
+                # from the filter, so a model like `claude-opus-4-8-fast` (sorted
+                # into the tail) was unreachable. 1000 covers every real provider
+                # while bounding a pathological aggregator. (Enrichment loops
+                # below are per-model dict lookups — no per-model network — so
+                # this stays cheap.)
+                max_models=1000,
                 include_unconfigured=True,
                 picker_hints=True,
                 canonical_order=True,
@@ -11521,6 +11661,72 @@ _mount_plugin_api_routes()
 # not whether the routes exist.
 from hermes_cli.dashboard_auth.routes import router as _dashboard_auth_router  # noqa: E402
 app.include_router(_dashboard_auth_router)
+
+
+# ── HermesOS web rich-chat (apps/desktop renderer, hosted) ──────────────────
+# Served at /webchat from the baked-in bundle (HERMES_WEBCHAT_DIST or
+# hermes_cli/webchat_dist), registered BEFORE the SPA catch-all so mount_spa's
+# /{full_path:path} doesn't swallow it. Token + base-path are injected into
+# index.html exactly like mount_spa does for the dashboard SPA. Additive: if the
+# bundle isn't baked into the image, /webchat is simply absent.
+_WEBCHAT_DIST = (
+    Path(os.environ["HERMES_WEBCHAT_DIST"])
+    if "HERMES_WEBCHAT_DIST" in os.environ
+    else Path(__file__).parent / "webchat_dist"
+)
+if _WEBCHAT_DIST.exists() and (_WEBCHAT_DIST / "index.html").exists():
+    _webchat_index_path = _WEBCHAT_DIST / "index.html"
+
+    def _serve_webchat_index(request: Request) -> HTMLResponse:
+        prefix = _normalise_prefix(request.headers.get("x-forwarded-prefix"))
+        html = _webchat_index_path.read_text()
+        gated = bool(getattr(app.state, "auth_required", False))
+        token_js = "" if gated else f'window.__HERMES_SESSION_TOKEN__="{_SESSION_TOKEN}";'
+        boot = (
+            f"<script>{token_js}"
+            f'window.__HERMES_BASE_PATH__="{prefix}";'
+            f'window.__HERMES_AUTH_REQUIRED__={"true" if gated else "false"};'
+            f"</script>"
+        )
+        # The bundle is built with base=/webchat/, so its asset URLs already
+        # point at /webchat/...; only a non-empty proxy prefix needs rewriting.
+        if prefix:
+            html = html.replace('"/webchat/', f'"{prefix}/webchat/')
+        html = html.replace("</head>", f"{boot}</head>", 1)
+        return HTMLResponse(
+            html, headers={"Cache-Control": "no-store, no-cache, must-revalidate"}
+        )
+
+    app.mount(
+        "/webchat/assets",
+        StaticFiles(directory=_WEBCHAT_DIST / "assets"),
+        name="webchat_assets",
+    )
+
+    @app.get("/webchat")
+    async def _webchat_root(request: Request):
+        return _serve_webchat_index(request)
+
+    @app.get("/webchat/{full_path:path}")
+    async def _webchat_spa(full_path: str, request: Request):
+        # Serve a real static file (icons, fonts, sprites) when present;
+        # otherwise return the SPA shell for client-side routing.
+        candidate = _WEBCHAT_DIST / full_path
+        try:
+            if candidate.is_file() and candidate.resolve().is_relative_to(
+                _WEBCHAT_DIST.resolve()
+            ):
+                return FileResponse(candidate)
+        except (OSError, RuntimeError, ValueError):
+            pass
+        return _serve_webchat_index(request)
+
+    _log.info("Mounted HermesOS web rich-chat at /webchat (%s)", _WEBCHAT_DIST)
+else:
+    _log.info(
+        "HermesOS web rich-chat bundle not present (%s) — /webchat not mounted",
+        _WEBCHAT_DIST,
+    )
 
 mount_spa(app)
 

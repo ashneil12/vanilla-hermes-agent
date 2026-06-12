@@ -93,6 +93,16 @@ CHAT_COMPLETIONS_SSE_KEEPALIVE_SECONDS = 30.0
 MAX_NORMALIZED_TEXT_LENGTH = 65_536  # 64 KB cap for normalized content parts
 MAX_CONTENT_LIST_SIZE = 1_000  # Max items when content is an array
 
+# hermes-fork: runtime-governor billing meter (DEFAULT-OFF — wired inside
+# _run_agent; identical to upstream unless HERMES_RUNTIME_GOVERNOR_* is set).
+RUNTIME_GOVERNOR_POLL_SECONDS = 5.0
+RUNTIME_GOVERNOR_UNAVAILABLE_MESSAGE = (
+    "HermesOS runtime limits could not be verified. Try again in a moment."
+)
+RUNTIME_GOVERNOR_LIMIT_MESSAGE = (
+    "HermesOS runtime limit reached. Upgrade or wait for your allowance to reset."
+)
+
 
 def _coerce_port(value: Any, default: int = DEFAULT_PORT) -> int:
     """Parse a listen port without letting malformed env/config values crash startup."""
@@ -3483,6 +3493,71 @@ class APIServerAdapter(BasePlatformAdapter):
     # Agent execution
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # hermes-fork: runtime-governor billing meter helpers. All are no-ops
+    # unless HERMES_RUNTIME_GOVERNOR_* is set (get_runtime_governor() returns
+    # a disabled client), so the API surface is identical to upstream by
+    # default. Used only from _run_agent — the single agent-run choke point.
+    # ------------------------------------------------------------------
+    def _governor_admit(self, *, session_key: str, message_preview: str):
+        """Return (governor, lease_id). lease_id == "__denied__" means deny;
+        (None, None) means governor disabled / no metering."""
+        try:
+            from gateway.runtime_governor import get_runtime_governor
+            governor = get_runtime_governor()
+            if not getattr(governor, "enabled", False):
+                return None, None
+            decision = governor.admit(
+                platform="api_server",
+                session_key=session_key,
+                source_message_id=session_key,
+                message_preview=(message_preview or "")[:500],
+            )
+            if not decision.allowed:
+                self._governor_denied_message = decision.user_message or RUNTIME_GOVERNOR_UNAVAILABLE_MESSAGE
+                return governor, "__denied__"
+            lease_id = decision.lease_id
+            if lease_id:
+                try:
+                    governor.start(lease_id)
+                except Exception as exc:
+                    self._governor_denied_message = getattr(exc, "user_message", "") or RUNTIME_GOVERNOR_UNAVAILABLE_MESSAGE
+                    return governor, "__denied__"
+            return governor, lease_id
+        except Exception as exc:
+            logger.warning("[api_server] runtime governor admission failed closed: %s", exc.__class__.__name__)
+            self._governor_denied_message = RUNTIME_GOVERNOR_UNAVAILABLE_MESSAGE
+            # Fail closed: deny the run when the governor cannot be verified.
+            return object(), "__denied__"
+
+    def _governor_heartbeat_should_stop(self, governor, lease_id, cutoff_state) -> bool:
+        """Heartbeat the lease; record + return a cutoff if the meter says stop."""
+        try:
+            heartbeat = governor.heartbeat(lease_id)
+        except Exception as exc:
+            logger.warning("[api_server] runtime governor heartbeat error: %s", exc.__class__.__name__)
+            cutoff_state["hit"] = True
+            cutoff_state["message"] = RUNTIME_GOVERNOR_UNAVAILABLE_MESSAGE
+            return True
+        if heartbeat.should_stop:
+            cutoff_state["hit"] = True
+            cutoff_state["message"] = heartbeat.user_message or RUNTIME_GOVERNOR_LIMIT_MESSAGE
+            return True
+        return False
+
+    def _governor_close(self, governor, lease_id, *, result, error: bool = False) -> None:
+        """Close the lease: finish on clean end, fail on cutoff/error."""
+        if governor is None or not lease_id or lease_id == "__denied__":
+            return
+        try:
+            cutoff = bool(result and result.get("runtime_cutoff"))
+            if error or cutoff:
+                governor.fail(lease_id, reason="runtime_cutoff" if cutoff else "agent_error")
+            else:
+                governor.finish(lease_id, reason="agent_end")
+        except Exception as exc:
+            logger.warning("[api_server] runtime governor lease close failed: %s", exc.__class__.__name__)
+
     async def _run_agent(
         self,
         user_message: str,
@@ -3509,6 +3584,20 @@ class APIServerAdapter(BasePlatformAdapter):
         """
         loop = asyncio.get_running_loop()
 
+        # hermes-fork: runtime-governor admit/start (no-op + no lease when the
+        # governor is disabled, so the run path below is identical to upstream).
+        _gov, _lease_id = self._governor_admit(
+            session_key=gateway_session_key or session_id or "",
+            message_preview=user_message,
+        )
+        if _gov is not None and _lease_id == "__denied__":
+            # Admission denied / unavailable — short-circuit with a plain reply.
+            _msg = getattr(self, "_governor_denied_message", "") or RUNTIME_GOVERNOR_UNAVAILABLE_MESSAGE
+            return {"final_response": _msg, "failed": True, "runtime_cutoff": True}, {
+                "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
+            }
+        _cutoff = {"hit": False, "message": ""}
+
         def _run():
             from gateway.session_context import clear_session_vars, set_session_vars
 
@@ -3530,6 +3619,19 @@ class APIServerAdapter(BasePlatformAdapter):
                 )
                 if agent_ref is not None:
                     agent_ref[0] = agent
+                # hermes-fork: heartbeat from the agent's step callback; on a
+                # governor cutoff, interrupt the in-flight conversation.
+                if _gov is not None and _lease_id:
+                    def _gov_step(_iteration, _prev_tools, _agent=agent):
+                        if _cutoff["hit"]:
+                            return
+                        if self._governor_heartbeat_should_stop(_gov, _lease_id, _cutoff):
+                            if hasattr(_agent, "interrupt"):
+                                try:
+                                    _agent.interrupt(_cutoff["message"])
+                                except Exception:
+                                    pass
+                    agent.step_callback = _gov_step
                 effective_task_id = session_id or str(uuid.uuid4())
                 result = agent.run_conversation(
                     user_message=user_message,
@@ -3551,7 +3653,18 @@ class APIServerAdapter(BasePlatformAdapter):
             finally:
                 clear_session_vars(tokens)
 
-        return await loop.run_in_executor(None, _run)
+        try:
+            result, usage = await loop.run_in_executor(None, _run)
+            # hermes-fork: surface a metered cutoff to callers and the lease close.
+            if _cutoff["hit"] and isinstance(result, dict):
+                result["runtime_cutoff"] = True
+                if not (result.get("final_response") or "").strip():
+                    result["final_response"] = _cutoff["message"] or RUNTIME_GOVERNOR_LIMIT_MESSAGE
+            self._governor_close(_gov, _lease_id, result=result)
+            return result, usage
+        except Exception:
+            self._governor_close(_gov, _lease_id, result=None, error=True)
+            raise
 
     # ------------------------------------------------------------------
     # /v1/runs — structured event streaming
@@ -3735,9 +3848,23 @@ class APIServerAdapter(BasePlatformAdapter):
             model=body.get("model", self._model_name),
         )
 
+        # hermes-fork: runtime-governor admit/start for /v1/runs (no-op when disabled).
+        _runs_gov, _runs_lease = self._governor_admit(
+            session_key=approval_session_key, message_preview=user_message,
+        )
+        _runs_cutoff = {"hit": False, "message": ""}
+        _runs_errored = {"hit": False}
+
         async def _run_and_close():
             try:
                 self._set_run_status(run_id, "running")
+                # hermes-fork: governor admission denied / unavailable.
+                if _runs_gov is not None and _runs_lease == "__denied__":
+                    _msg = getattr(self, "_governor_denied_message", "") or RUNTIME_GOVERNOR_UNAVAILABLE_MESSAGE
+                    q.put_nowait({"event": "run.failed", "run_id": run_id,
+                                  "timestamp": time.time(), "error": _msg})
+                    self._set_run_status(run_id, "failed", error=_msg, last_event="run.failed")
+                    return
                 agent = self._create_agent(
                     ephemeral_system_prompt=ephemeral_system_prompt,
                     session_id=session_id,
@@ -3746,6 +3873,18 @@ class APIServerAdapter(BasePlatformAdapter):
                     gateway_session_key=gateway_session_key,
                 )
                 self._active_run_agents[run_id] = agent
+                # hermes-fork: heartbeat from the agent's step callback.
+                if _runs_gov is not None and _runs_lease and _runs_lease != "__denied__":
+                    def _runs_gov_step(_iteration, _prev_tools, _agent=agent):
+                        if _runs_cutoff["hit"]:
+                            return
+                        if self._governor_heartbeat_should_stop(_runs_gov, _runs_lease, _runs_cutoff):
+                            if hasattr(_agent, "interrupt"):
+                                try:
+                                    _agent.interrupt(_runs_cutoff["message"])
+                                except Exception:
+                                    pass
+                    agent.step_callback = _runs_gov_step
 
                 def _approval_notify(approval_data: Dict[str, Any]) -> None:
                     event = dict(approval_data or {})
@@ -3814,6 +3953,9 @@ class APIServerAdapter(BasePlatformAdapter):
                     return r, u
 
                 result, usage = await asyncio.get_running_loop().run_in_executor(None, _run_sync)
+                # hermes-fork: a governor cutoff is a clean metered stop.
+                if _runs_cutoff["hit"] and isinstance(result, dict):
+                    result["runtime_cutoff"] = True
                 # Check for structured failure (non-retryable client errors like
                 # 401/400 return failed=True instead of raising, so the except
                 # block below never fires — issue #15561).
@@ -3863,6 +4005,7 @@ class APIServerAdapter(BasePlatformAdapter):
                     pass
                 raise
             except Exception as exc:
+                _runs_errored["hit"] = True  # hermes-fork
                 logger.exception("[api_server] run %s failed", run_id)
                 self._set_run_status(
                     run_id,
@@ -3880,6 +4023,12 @@ class APIServerAdapter(BasePlatformAdapter):
                 except Exception:
                     pass
             finally:
+                # hermes-fork: close the runtime-governor lease (no-op when disabled).
+                self._governor_close(
+                    _runs_gov, _runs_lease,
+                    result={"runtime_cutoff": True} if _runs_cutoff["hit"] else None,
+                    error=_runs_errored["hit"],
+                )
                 # If the asyncio wrapper is cancelled (for example via
                 # /stop), the executor thread can still be blocked waiting
                 # on an approval Event.  Unregistering here releases those

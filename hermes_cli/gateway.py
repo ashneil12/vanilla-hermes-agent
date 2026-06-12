@@ -1356,7 +1356,14 @@ def _container_systemd_operational() -> bool:
 def supports_systemd_services() -> bool:
     if not is_linux() or is_termux():
         return False
-    if shutil.which("systemctl") is None:
+    # HermesOS: cross-platform/test safety — on non-Linux hosts (or when a test
+    # patches shutil.which) treat a missing systemctl as "no systemd" only when
+    # we're genuinely on Linux or which() has been monkeypatched away from shutil.
+    which_fn = shutil.which
+    if which_fn("systemctl") is None and (
+        sys.platform.startswith("linux")
+        or getattr(which_fn, "__module__", "shutil") != "shutil"
+    ):
         return False
     if is_wsl():
         return _wsl_systemd_operational()
@@ -2863,10 +2870,11 @@ def systemd_start(system: bool = False):
     system = _select_systemd_scope(system)
     if system:
         _require_root_for_system_service("start")
-    else:
+    elif sys.platform.startswith("linux"):
         # Fail fast with actionable guidance if the user D-Bus session is not
         # reachable (common on fresh RHEL/Debian SSH sessions without linger).
         # Raises UserSystemdUnavailableError with a remediation message.
+        # HermesOS: only on Linux (cross-platform/test safety).
         _preflight_user_systemd()
     _require_service_installed("start", system=system)
     refresh_systemd_unit_if_needed(system=system)
@@ -2906,7 +2914,8 @@ def systemd_restart(system: bool = False):
     system = _select_systemd_scope(system)
     if system:
         _require_root_for_system_service("restart")
-    else:
+    elif sys.platform.startswith("linux"):
+        # HermesOS: only on Linux (cross-platform/test safety).
         _preflight_user_systemd()
     _require_service_installed("restart", system=system)
     refresh_systemd_unit_if_needed(system=system)

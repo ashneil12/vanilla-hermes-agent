@@ -1303,6 +1303,25 @@ def _scan_assembled_cron_prompt(
     return assembled
 
 
+def _build_governor_output(job: dict, job_id: str, prompt: str, final_response: str) -> str:
+    """hermes-fork: render the standard cron output doc for a runtime-governor
+    short-circuit (admission denied / start failed / unavailable)."""
+    return f"""# Cron Job: {job.get('name', job_id)}
+
+**Job ID:** {job_id}
+**Run Time:** {_hermes_now().strftime('%Y-%m-%d %H:%M:%S')}
+**Schedule:** {job.get('schedule_display', 'N/A')}
+
+## Prompt
+
+{prompt}
+
+## Response
+
+{final_response}
+"""
+
+
 def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
     """
     Execute a single cron job.
@@ -1485,6 +1504,12 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
         return True, "", SILENT_MARKER, None
     origin = _resolve_origin(job)
     _cron_session_id = f"cron_{job_id}_{_hermes_now().strftime('%Y%m%d_%H%M%S')}"
+    # hermes-fork: runtime-governor billing meter (DEFAULT-OFF — get_runtime_governor()
+    # returns a disabled client unless HERMES_RUNTIME_GOVERNOR_* is set, so behavior
+    # is identical to upstream when unset).
+    runtime_governor = None
+    runtime_lease_id = None
+    runtime_lease_outcome = "agent_error"
 
     logger.info("Running job '%s' (ID: %s)", job_name, job_id)
     logger.info("Prompt: %s", prompt[:100])
@@ -1566,6 +1591,44 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
             load_dotenv(str(_get_hermes_home() / ".env"), override=True, encoding="utf-8")
         except UnicodeDecodeError:
             load_dotenv(str(_get_hermes_home() / ".env"), override=True, encoding="latin-1")
+
+        # hermes-fork: runtime-governor admit/start (no-op when governor disabled).
+        try:
+            from gateway.runtime_governor import (
+                DEFAULT_UNAVAILABLE_MESSAGE,
+                RuntimeGovernorError,
+                get_runtime_governor,
+            )
+
+            runtime_governor = get_runtime_governor()
+            runtime_decision = runtime_governor.admit(
+                platform="cron",
+                session_key=_cron_session_id,
+                source_message_id=_cron_session_id,
+                message_preview=prompt[:500],
+            )
+            if not runtime_decision.allowed:
+                final_response = runtime_decision.user_message or DEFAULT_UNAVAILABLE_MESSAGE
+                return True, _build_governor_output(job, job_id, prompt, final_response), final_response, None
+
+            runtime_lease_id = runtime_decision.lease_id
+            if runtime_lease_id:
+                try:
+                    runtime_governor.start(runtime_lease_id)
+                except RuntimeGovernorError as exc:
+                    logger.warning(
+                        "Cron job '%s': runtime governor start failed closed: %s",
+                        job_id, exc.__class__.__name__,
+                    )
+                    final_response = exc.user_message
+                    return True, _build_governor_output(job, job_id, prompt, final_response), final_response, None
+        except Exception as exc:
+            logger.warning(
+                "Cron job '%s': runtime governor admission failed closed: %s",
+                job_id, exc.__class__.__name__,
+            )
+            final_response = "HermesOS runtime limits could not be verified. Try again in a moment."
+            return True, _build_governor_output(job, job_id, prompt, final_response), final_response, None
 
         delivery_target = _resolve_delivery_target(job)
         if delivery_target:
@@ -1755,7 +1818,47 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
             session_id=_cron_session_id,
             session_db=_session_db,
         )
-        
+
+        # hermes-fork: runtime-governor heartbeat/cutoff (only wired when a lease
+        # is active, i.e. governor enabled). Interrupts the agent on cutoff.
+        _runtime_cutoff = False
+        _runtime_cutoff_message = ""
+
+        def _record_runtime_cutoff(user_message: str) -> None:
+            nonlocal _runtime_cutoff, _runtime_cutoff_message
+            if _runtime_cutoff:
+                return
+            _runtime_cutoff = True
+            _runtime_cutoff_message = (
+                user_message
+                or "HermesOS runtime limit reached. Upgrade or wait for your allowance to reset."
+            )
+            if hasattr(agent, "interrupt"):
+                try:
+                    agent.interrupt(_runtime_cutoff_message)
+                except Exception as _e:
+                    logger.debug("Job '%s': runtime governor interrupt failed: %s", job_id, _e)
+
+        def _heartbeat_runtime_sync() -> None:
+            if not runtime_lease_id or runtime_governor is None or _runtime_cutoff:
+                return
+            try:
+                heartbeat = runtime_governor.heartbeat(runtime_lease_id)
+            except Exception as _e:
+                logger.warning(
+                    "Job '%s': runtime governor heartbeat error: %s",
+                    job_id, _e.__class__.__name__,
+                )
+                _record_runtime_cutoff(
+                    "HermesOS runtime limits could not be verified. Try again in a moment."
+                )
+                return
+            if heartbeat.should_stop:
+                _record_runtime_cutoff(heartbeat.user_message)
+
+        if runtime_lease_id:
+            agent.step_callback = lambda _iteration, _prev_tools: _heartbeat_runtime_sync()
+
         # Run the agent with an *inactivity*-based timeout: the job can run
         # for hours if it's actively calling tools / receiving stream tokens,
         # but a hung API call or stuck tool with no activity for the configured
@@ -1787,8 +1890,23 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
         _inactivity_timeout = False
         try:
             if _cron_inactivity_limit is None:
-                # Unlimited — just wait for the result.
-                result = _cron_future.result()
+                # Unlimited — just wait for the result. hermes-fork: still poll
+                # when a runtime lease is active so a managed instance can be cut
+                # off during long API/tool waits.
+                if runtime_lease_id:
+                    result = None
+                    while True:
+                        done, _ = concurrent.futures.wait(
+                            {_cron_future}, timeout=_POLL_INTERVAL,
+                        )
+                        if done:
+                            result = _cron_future.result()
+                            break
+                        _heartbeat_runtime_sync()
+                        if _runtime_cutoff:
+                            break
+                else:
+                    result = _cron_future.result()
             else:
                 result = None
                 while True:
@@ -1798,6 +1916,11 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
                     if done:
                         result = _cron_future.result()
                         break
+                    # hermes-fork: runtime-governor cutoff check.
+                    if runtime_lease_id:
+                        _heartbeat_runtime_sync()
+                        if _runtime_cutoff:
+                            break
                     # Agent still running — check inactivity.
                     _idle_secs = 0.0
                     if hasattr(agent, "get_activity_summary"):
@@ -1814,6 +1937,11 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
             raise
         finally:
             _cron_pool.shutdown(wait=False, cancel_futures=True)
+
+        # hermes-fork: synthesize a result from the governor cutoff message.
+        if _runtime_cutoff:
+            runtime_lease_outcome = "runtime_cutoff"
+            result = {"final_response": _runtime_cutoff_message}
 
         if _inactivity_timeout:
             # Build diagnostic summary from the agent's activity tracker.
@@ -1889,9 +2017,13 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
 """
         
         logger.info("Job '%s' completed successfully", job_name)
+        # hermes-fork: stamp success outcome unless a governor cutoff already won.
+        if runtime_lease_outcome != "runtime_cutoff":
+            runtime_lease_outcome = "agent_end"
         return True, output, final_response, None
-        
+
     except Exception as e:
+        runtime_lease_outcome = "agent_error"  # hermes-fork
         error_msg = f"{type(e).__name__}: {str(e)}"
         logger.exception("Job '%s' failed: %s", job_name, error_msg)
         
@@ -1914,6 +2046,22 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
         return False, output, "", error_msg
 
     finally:
+        # hermes-fork: close the runtime-governor lease (finish on clean end,
+        # fail otherwise). No-op when governor disabled (no lease).
+        if runtime_lease_id and runtime_governor is not None:
+            try:
+                if runtime_lease_outcome == "agent_end":
+                    runtime_governor.finish(runtime_lease_id, reason="agent_end")
+                else:
+                    runtime_governor.fail(
+                        runtime_lease_id,
+                        reason=runtime_lease_outcome or "agent_error",
+                    )
+            except Exception as _runtime_close_err:
+                logger.warning(
+                    "Job '%s': runtime governor lease close failed: %s",
+                    job_id, _runtime_close_err.__class__.__name__,
+                )
         # Restore TERMINAL_CWD to whatever it was before this job ran.  We
         # only ever mutate it when the job has a workdir; see the setup block
         # at the top of run_job for the serialization guarantee.
