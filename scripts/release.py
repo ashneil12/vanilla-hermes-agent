@@ -935,6 +935,9 @@ AUTHOR_MAP = {
     "zaynjarvis@gmail.com": "ZaynJarvis",
     "zhiheng.liu@bytedance.com": "ZaynJarvis",
     "izhaolongfei@gmail.com": "loongfay",
+    # hermes-fork: 2026-06-12 upstream sync
+    "loongfay@foxmail.com": "loongfay",
+    "aeon@hermesos.cloud": "ashneil12",
     "296659110@qq.com": "lrt4836",
     "fe.daniel91@gmail.com": "beforeload",
     "libo1106@foxmail.com": "libo1106",
