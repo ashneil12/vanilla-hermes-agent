@@ -4,6 +4,11 @@ on:
   # Manual only. builderbox-1 is the primary trusted image publisher;
   # this GitHub workflow remains a backup path and must not race :stable on merge.
   workflow_dispatch:
+    inputs:
+      force_floating:
+        description: "Move :latest/:stable even if the registry tag is not an ancestor (divergent cutover)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -14,6 +19,12 @@ permissions:
 concurrency:
   group: docker-${{ github.ref }}
   cancel-in-progress: true
+
+# Image namespace tracks the repository: the canary fork publishes
+# ...vanilla-hermes-agent-canary and the prod fork publishes
+# ...vanilla-hermes-agent — one workflow, both forks treated the same.
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
 
 jobs:
   build-and-push:
@@ -45,7 +56,7 @@ jobs:
           file: Dockerfile
           load: true
           platforms: linux/amd64
-          tags: ghcr.io/ashneil12/vanilla-hermes-agent-canary:test
+          tags: ${{ env.IMAGE }}:test
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -55,7 +66,7 @@ jobs:
           sudo chown -R 10000:10000 /tmp/hermes-test
           docker run --rm \
             -v /tmp/hermes-test:/opt/data \
-            ghcr.io/ashneil12/vanilla-hermes-agent-canary:test --help
+            "$IMAGE:test" --help
 
       - name: Test dashboard subcommand
         run: |
@@ -63,7 +74,7 @@ jobs:
           sudo chown -R 10000:10000 /tmp/hermes-test
           docker run --rm \
             -v /tmp/hermes-test:/opt/data \
-            ghcr.io/ashneil12/vanilla-hermes-agent-canary:test dashboard --help
+            "$IMAGE:test" dashboard --help
 
       # Regression gate: media (image/video/audio) tool wiring must be intact in
       # the freshly built image BEFORE we publish :stable. If an upstream-sync
@@ -78,7 +89,7 @@ jobs:
           # light (cardinal rule #1) while still running the regression gate.
           docker run --rm \
             --entrypoint sh \
-            ghcr.io/ashneil12/vanilla-hermes-agent-canary:test \
+            "$IMAGE:test" \
             -lc 'cd /opt/hermes && /usr/local/bin/uv pip install --python /opt/hermes/.venv/bin/python3 -q pytest pytest-timeout && /opt/hermes/.venv/bin/python3 -m pytest tests/tools/test_media_generation_wiring.py -q'
 
 
@@ -106,7 +117,7 @@ jobs:
           push: true
           provenance: false
           platforms: linux/amd64
-          tags: ghcr.io/ashneil12/vanilla-hermes-agent-canary:${{ github.sha }}
+          tags: ${{ env.IMAGE }}:${{ github.sha }}
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha
@@ -127,10 +138,10 @@ jobs:
           provenance: false
           platforms: linux/amd64
           tags: |
-            ghcr.io/ashneil12/vanilla-hermes-agent-canary:latest
-            ghcr.io/ashneil12/vanilla-hermes-agent-canary:stable
-            ghcr.io/ashneil12/vanilla-hermes-agent-canary:${{ github.event.release.tag_name }}
-            ghcr.io/ashneil12/vanilla-hermes-agent-canary:${{ github.sha }}
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:stable
+            ${{ env.IMAGE }}:${{ github.event.release.tag_name }}
+            ${{ env.IMAGE }}:${{ github.sha }}
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha
@@ -168,9 +179,20 @@ jobs:
 
       - name: Decide whether to move floating tags
         id: latest_check
+        env:
+          FORCE_FLOATING: ${{ github.event.inputs.force_floating }}
         run: |
           set -euo pipefail
-          image=ghcr.io/ashneil12/vanilla-hermes-agent-canary
+          image="$IMAGE"
+
+          # Divergent cutover (e.g. fresh-start force-push): the registry :latest
+          # is not an ancestor of this commit, so the safety check below would
+          # refuse. An explicit force_floating dispatch overrides it.
+          if [ "${FORCE_FLOATING:-}" = "true" ]; then
+            echo "force_floating requested — moving floating tags unconditionally."
+            echo "push_floating=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           image_json=$(
             docker buildx imagetools inspect "${image}:latest" \
@@ -228,7 +250,7 @@ jobs:
         if: steps.latest_check.outputs.push_floating == 'true'
         run: |
           set -euo pipefail
-          image=ghcr.io/ashneil12/vanilla-hermes-agent-canary
+          image="$IMAGE"
           docker buildx imagetools create \
             --tag "${image}:latest" \
             --tag "${image}:stable" \
