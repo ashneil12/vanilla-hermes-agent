@@ -356,6 +356,7 @@ AUTHOR_MAP = {
     "rino.alpin@gmail.com": "kunci115",  # PR #27098 salvage (thread-not-found retry)
     "hayka-pacha@users.noreply.github.com": "hayka-pacha",  # PR #25270 salvage (registry-aware mcp_ prefix strip)
     "237601532+chromalinx@users.noreply.github.com": "chromalinx",  # PR #27014 salvage (commands for groups+DM)
+    "chromalinx@users.noreply.github.com": "chromalinx",  # PR #37026 salvage (SSL CA guard)
     "booker1207@gmail.com": "booker1207",  # PR #25132 salvage (gate profile bots by allowed topics)
     "kiranvk2011@gmail.com": "kiranvk-2011",  # PR #24815 salvage (image documents → vision)
     "kosmonaut-t@centrum.cz": "rak135",  # PR #25960 salvage (Windows /restart)
@@ -1535,6 +1536,9 @@ AUTHOR_MAP = {
     "desg38@gmail.com": "dschnurbusch",  # PR #42373 salvage (archive compressed conversation lineages)
     "bsmith@bramarstrategicservices.com": "bcsmith528",  # PR #20589 salvage (register_slack_action_handler plugin API)
     "sunsky.lau@gmail.com": "liuhao1024",  # PR #45494 salvage (claim session slot before auto-resume task; #45456)
+    # hermes-fork: 2026-06-14 upstream sync
+    "129232709+aimable100@users.noreply.github.com": "aimable100",
+    "804759+jmsunseri@users.noreply.github.com": "jmsunseri",
 }
 
 
