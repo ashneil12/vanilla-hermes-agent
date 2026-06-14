@@ -1536,6 +1536,9 @@ AUTHOR_MAP = {
     "desg38@gmail.com": "dschnurbusch",  # PR #42373 salvage (archive compressed conversation lineages)
     "bsmith@bramarstrategicservices.com": "bcsmith528",  # PR #20589 salvage (register_slack_action_handler plugin API)
     "sunsky.lau@gmail.com": "liuhao1024",  # PR #45494 salvage (claim session slot before auto-resume task; #45456)
+    # hermes-fork: 2026-06-14 upstream sync
+    "129232709+aimable100@users.noreply.github.com": "aimable100",
+    "804759+jmsunseri@users.noreply.github.com": "jmsunseri",
 }
 
 
