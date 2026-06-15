@@ -1,8 +1,10 @@
 name: Docker Build and Publish
 
 on:
-  # Manual only. builderbox-1 is the primary trusted image publisher;
-  # this GitHub workflow remains a backup path and must not race :stable on merge.
+  # Manual-dispatch only. This workflow IS the image publisher: builderbox-1 (the
+  # former auto-publisher) was retired, so nothing auto-builds on merge. After
+  # merging to main, dispatch this explicitly:
+  #   gh workflow run docker-publish.yml --ref main
   workflow_dispatch:
     inputs:
       force_floating:
