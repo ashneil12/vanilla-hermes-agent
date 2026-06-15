@@ -1550,6 +1550,7 @@ AUTHOR_MAP = {
     "129232709+aimable100@users.noreply.github.com": "aimable100",
     "804759+jmsunseri@users.noreply.github.com": "jmsunseri",
     "andrewdmwalker@gmail.com": "capt-marbles",  # PR #38440 salvage (resolve xAI OAuth credentials across profiles; #43589)
+    "adalsteinni@gmail.com": "AIalliAI",  # PR #44159 (desktop: inset hover-reveal trigger past scrollbar)
 }
 
 
