@@ -257,6 +257,7 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "gemini-3.5-flash",
     ],
     "zai": [
+        "glm-5.2",
         "glm-5.1",
         "glm-5",
         "glm-5v-turbo",
@@ -281,6 +282,7 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "openai/gpt-oss-120b",
     ],
     "kimi-coding": [
+        "kimi-k2.7-code",
         "kimi-k2.6",
         "kimi-k2.5",
         "kimi-for-coding",
@@ -2390,6 +2392,18 @@ def provider_model_ids(provider: Optional[str], *, force_refresh: bool = False) 
             if api_key:
                 live = _p.fetch_models(api_key=api_key)
                 if live:
+                    # hermes-fork: upstream merges curated+live for kimi-coding
+                    # (preserving curated order); keep that path as-is, then apply
+                    # our generic sort to every other provider's live discovery.
+                    if normalized in {"kimi-coding", "kimi-coding-cn"}:
+                        curated = list(_PROVIDER_MODELS.get(normalized, []))
+                        merged = list(curated)
+                        merged_lower = {m.lower() for m in curated}
+                        for m in live:
+                            if m.lower() not in merged_lower:
+                                merged.append(m)
+                                merged_lower.add(m.lower())
+                        return merged
                     # Generic live discovery returns ids in the provider's own
                     # (often arbitrary marketplace) order. Sort so related
                     # families cluster and the GUI/CLI pickers stay navigable
