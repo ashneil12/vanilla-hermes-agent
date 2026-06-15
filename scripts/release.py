@@ -46,6 +46,7 @@ ACP_REGISTRY_MANIFEST = REPO_ROOT / "acp_registry" / "agent.json"
 # Auto-extracted from noreply emails + manual overrides
 AUTHOR_MAP = {
     "kenmege@yahoo.com": "Kenmege",
+    "tianying.x@eukarya.io": "xtymac",
     "dkobi16@gmail.com": "Diyoncrz18",
     "arnaud@nolimitdevelopment.com": "ali-nld",
     "sswdarius@gmail.com": "necoweb3",
@@ -84,6 +85,11 @@ AUTHOR_MAP = {
     "290859878+synapsesx@users.noreply.github.com": "synapsesx",
     "157689911+itsflownium@users.noreply.github.com": "itsflownium",
     "dirtyren@users.noreply.github.com": "dirtyren",
+    "tharushkadinujaya05@gmail.com": "0xneobyte",
+    "895252509@qq.com": "895252509",
+    "35259607+zxcasongs@users.noreply.github.com": "zxcasongs",
+    "alfred@my-cloud.me": "alfred-smith-0",
+    "tangtaizhong792@gmail.com": "tangtaizong666",
     "github@aldo.pw": "aldoeliacim",
     "max@c60spaceship.com": "MaxFreedomPollard",
     "achaljhawar03@gmail.com": "achaljhawar",
@@ -1543,6 +1549,8 @@ AUTHOR_MAP = {
     # hermes-fork: 2026-06-14 upstream sync
     "129232709+aimable100@users.noreply.github.com": "aimable100",
     "804759+jmsunseri@users.noreply.github.com": "jmsunseri",
+    "andrewdmwalker@gmail.com": "capt-marbles",  # PR #38440 salvage (resolve xAI OAuth credentials across profiles; #43589)
+    "adalsteinni@gmail.com": "AIalliAI",  # PR #44159 (desktop: inset hover-reveal trigger past scrollbar)
 }
 
 
