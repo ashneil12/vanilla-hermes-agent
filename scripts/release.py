@@ -1584,6 +1584,8 @@ AUTHOR_MAP = {
     "andrewdmwalker@gmail.com": "capt-marbles",  # PR #38440 salvage (resolve xAI OAuth credentials across profiles; #43589)
     "adalsteinni@gmail.com": "AIalliAI",  # PR #44159 (desktop: inset hover-reveal trigger past scrollbar)
     "infinitycrew39@gmail.com": "infinitycrew39",  # PR #47945 salvage (scope langfuse trace state by turn/request ids; #48292)
+    # hermes-fork: 2026-06-19 upstream sync
+    "92538686+colinwren-stripe@users.noreply.github.com": "colinwren-stripe",
 }
 
 
