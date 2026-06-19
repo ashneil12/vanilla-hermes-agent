@@ -5712,7 +5712,9 @@ def _load_config_impl(*, want_deepcopy: bool) -> Dict[str, Any]:
 
         cached = _LOAD_CONFIG_CACHE.get(path_key)
         if cached is not None and cache_sig is not None and cached[:4] == cache_sig:
-            return copy.deepcopy(cached[4]) if want_deepcopy else cached[4]
+            result = copy.deepcopy(cached[4]) if want_deepcopy else cached[4]
+            apply_bankr_env_from_config(result)  # hermes-fork: re-export on cache hit
+            return result
 
         config = copy.deepcopy(DEFAULT_CONFIG)
 
