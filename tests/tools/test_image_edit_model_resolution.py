@@ -136,7 +136,7 @@ class TestGenerateWithReference:
             raise AssertionError("should not edit without a reference")
 
         monkeypatch.setattr(ie, "image_edit_tool", boom)
-        monkeypatch.setattr(ig, "_dispatch_to_plugin_provider", lambda prompt, ar: '{"success": true, "image": "/g.png"}')
+        monkeypatch.setattr(ig, "_dispatch_to_plugin_provider", lambda prompt, ar, **kw: '{"success": true, "image": "/g.png"}')
         out = ig._handle_image_generate({"prompt": "a cat"})
         assert "success" in out
 
