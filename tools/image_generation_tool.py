@@ -1057,6 +1057,28 @@ IMAGE_GENERATE_SCHEMA = {
                     "new one."
                 ),
             },
+            "image_url": {
+                "type": "string",
+                "description": (
+                    "Optional source image to edit/transform (image-to-image). "
+                    "When provided, the active backend routes to its image "
+                    "editing endpoint; when omitted, it generates from text "
+                    "alone. Pass a public URL or an absolute local file path "
+                    "from the conversation. Only honored by models that "
+                    "support editing — the description above indicates whether "
+                    "the active model does."
+                ),
+            },
+            "reference_image_urls": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Optional list of additional reference image URLs / paths "
+                    "(style, character, or composition references) to guide an "
+                    "image-to-image edit. Supported only by some models and "
+                    "capped per-model; the description above indicates the max."
+                ),
+            },
         },
         "required": ["prompt"],
     },
@@ -1123,7 +1145,12 @@ def _read_configured_image_provider():
     return None
 
 
-def _dispatch_to_plugin_provider(prompt: str, aspect_ratio: str):
+def _dispatch_to_plugin_provider(
+    prompt: str,
+    aspect_ratio: str,
+    image_url: Optional[str] = None,
+    reference_image_urls: Optional[list] = None,
+):
     """Route the call to a plugin-registered provider when one is selected.
 
     Returns a JSON string on dispatch, or ``None`` to fall through to the
@@ -1134,6 +1161,10 @@ def _dispatch_to_plugin_provider(prompt: str, aspect_ratio: str):
     ``plugins/image_gen/fal/`` plugin (the plugin re-enters this module's
     pipeline via ``_it`` indirection so behavior is identical to the
     direct call, just routed through the registry).
+
+    ``image_url`` / ``reference_image_urls`` enable image-to-image / editing:
+    they are forwarded to the provider's ``generate()`` so the backend can
+    route to its edit endpoint.
     """
     configured = _read_configured_image_provider()
     # hermes-fork: explicit "fal" short-circuits to the in-tree FAL pipeline
@@ -1203,13 +1234,55 @@ def _dispatch_to_plugin_provider(prompt: str, aspect_ratio: str):
     # dropdown becomes a live default (the Venice provider honors it).
     configured_style = _read_configured_image_style()
 
+    kwargs: Dict[str, Any] = {"prompt": prompt, "aspect_ratio": aspect_ratio}
     try:
-        kwargs = {"prompt": prompt, "aspect_ratio": aspect_ratio}
         if configured_model:
             kwargs["model"] = configured_model
         if configured_style:
             kwargs["style_preset"] = configured_style
+        if isinstance(image_url, str) and image_url.strip():
+            kwargs["image_url"] = image_url.strip()
+        norm_refs = None
+        if reference_image_urls is not None:
+            from agent.image_gen_provider import normalize_reference_images
+
+            norm_refs = normalize_reference_images(reference_image_urls)
+        if norm_refs:
+            kwargs["reference_image_urls"] = norm_refs
         result = provider.generate(**kwargs)
+    except TypeError as exc:
+        # A provider whose generate() signature predates image_url support
+        # (third-party plugin not yet updated) — retry without the new kwargs
+        # so text-to-image keeps working, but surface a clear note when the
+        # user actually asked for an edit.
+        if "image_url" in kwargs or "reference_image_urls" in kwargs:
+            logger.warning(
+                "image_gen provider '%s' rejected image-to-image kwargs "
+                "(signature too narrow): %s",
+                getattr(provider, "name", "?"), exc,
+            )
+            return json.dumps({
+                "success": False,
+                "image": None,
+                "error": (
+                    f"Provider '{getattr(provider, 'name', '?')}' does not "
+                    f"support image-to-image / editing (its generate() "
+                    f"signature is out of date with the image_generate schema). "
+                    f"Omit image_url for text-to-image, or pick a backend that "
+                    f"supports editing via `hermes tools` → Image Generation."
+                ),
+                "error_type": "modality_unsupported",
+            })
+        logger.warning(
+            "Image gen provider '%s' raised TypeError: %s",
+            getattr(provider, "name", "?"), exc,
+        )
+        return json.dumps({
+            "success": False,
+            "image": None,
+            "error": f"Provider '{getattr(provider, 'name', '?')}' error: {exc}",
+            "error_type": "provider_exception",
+        })
     except Exception as exc:
         logger.warning(
             "Image gen provider '%s' raised: %s",
@@ -1252,6 +1325,8 @@ def _handle_image_generate(args, **kw):
     if not prompt:
         return tool_error("prompt is required for image generation")
     aspect_ratio = args.get("aspect_ratio", DEFAULT_ASPECT_RATIO)
+    image_url = args.get("image_url")
+    reference_image_urls = args.get("reference_image_urls")
     task_id = kw.get("task_id")
 
     # hermes-fork: reference-conditioned generation. When source image(s) are
@@ -1278,15 +1353,136 @@ def _handle_image_generate(args, **kw):
 
     # Route to a plugin-registered provider if one is active (and it's
     # not the in-tree FAL path).
-    dispatched = _dispatch_to_plugin_provider(prompt, aspect_ratio)
+    dispatched = _dispatch_to_plugin_provider(
+        prompt, aspect_ratio,
+        image_url=image_url,
+        reference_image_urls=reference_image_urls,
+    )
     if dispatched is not None:
         return _postprocess_image_generate_result(dispatched, task_id=task_id)
 
     raw = image_generate_tool(
         prompt=prompt,
         aspect_ratio=aspect_ratio,
+        image_url=image_url,
+        reference_image_urls=reference_image_urls,
     )
     return _postprocess_image_generate_result(raw, task_id=task_id)
+
+
+# ---------------------------------------------------------------------------
+# Dynamic schema — reflect the active backend's image-to-image capability
+# ---------------------------------------------------------------------------
+#
+# Why dynamic: whether the active model supports image-to-image / editing
+# depends entirely on the user's configured backend + model. Telling the
+# model up front ("the active model is text-to-image only — image_url will be
+# rejected") saves a wasted turn. Memoized by config.yaml mtime in
+# model_tools.get_tool_definitions(), so it rebuilds when the user switches
+# model/provider via `hermes tools` or `/skills`.
+
+
+_GENERIC_IMAGE_DESCRIPTION = IMAGE_GENERATE_SCHEMA["description"]
+
+
+def _active_image_capabilities() -> Dict[str, Any]:
+    """Best-effort: return the active backend/model's image capabilities.
+
+    Resolution order mirrors the runtime dispatch:
+    1. If ``image_gen.provider`` is set, ask that plugin provider.
+    2. Otherwise inspect the in-tree FAL model catalog for the active model.
+
+    Returns a dict like ``{"modalities": [...], "max_reference_images": N,
+    "model": "...", "provider": "..."}``. Never raises.
+    """
+    info: Dict[str, Any] = {"modalities": ["text"], "max_reference_images": 0}
+
+    configured_provider = _read_configured_image_provider()
+    if configured_provider and configured_provider != "fal":
+        try:
+            from agent.image_gen_registry import get_provider
+            from hermes_cli.plugins import _ensure_plugins_discovered
+
+            _ensure_plugins_discovered()
+            provider = get_provider(configured_provider)
+            if provider is not None:
+                caps = {}
+                try:
+                    caps = provider.capabilities() or {}
+                except Exception:  # noqa: BLE001
+                    caps = {}
+                info["provider"] = provider.display_name
+                info["model"] = _read_configured_image_model() or (provider.default_model() or "")
+                if caps.get("modalities"):
+                    info["modalities"] = list(caps["modalities"])
+                if caps.get("max_reference_images"):
+                    info["max_reference_images"] = int(caps["max_reference_images"])
+                return info
+        except Exception:  # noqa: BLE001
+            pass
+
+    # In-tree FAL path (provider unset or == "fal").
+    try:
+        model_id, meta = _resolve_fal_model()
+        info["provider"] = "FAL.ai"
+        info["model"] = meta.get("display", model_id)
+        if meta.get("edit_endpoint"):
+            info["modalities"] = ["text", "image"]
+            info["max_reference_images"] = int(meta.get("max_reference_images") or 1)
+        else:
+            info["modalities"] = ["text"]
+            info["max_reference_images"] = 0
+    except Exception:  # noqa: BLE001
+        pass
+
+    return info
+
+
+def _build_dynamic_image_schema() -> Dict[str, Any]:
+    """Build a description reflecting whether the active model supports editing."""
+    parts = [_GENERIC_IMAGE_DESCRIPTION]
+
+    try:
+        info = _active_image_capabilities()
+    except Exception:  # noqa: BLE001
+        return {"description": _GENERIC_IMAGE_DESCRIPTION}
+
+    provider = info.get("provider")
+    model = info.get("model")
+    modalities = set(info.get("modalities") or ["text"])
+
+    line = "\nActive backend"
+    if provider:
+        line += f": {provider}"
+    if model:
+        line += f" · model: {model}"
+    parts.append(line)
+
+    if "image" in modalities and "text" in modalities:
+        max_refs = info.get("max_reference_images") or 0
+        ref_note = (
+            f"; up to {max_refs} reference image(s) via reference_image_urls"
+            if max_refs and max_refs > 1
+            else ""
+        )
+        parts.append(
+            "- supports both text-to-image (omit image_url) and "
+            f"image-to-image / editing (pass image_url){ref_note} — "
+            "routes automatically"
+        )
+    elif "image" in modalities and "text" not in modalities:
+        parts.append(
+            "- this model is image-to-image / edit only — image_url is REQUIRED"
+        )
+    else:
+        parts.append(
+            "- this model is text-to-image only — it is NOT capable of "
+            "image-to-image / editing; do not pass image_url or "
+            "reference_image_urls (they will be rejected). Provide a "
+            "text-only prompt."
+        )
+
+    return {"description": "\n".join(parts)}
 
 
 registry.register(
@@ -1298,4 +1494,5 @@ registry.register(
     requires_env=[],
     is_async=False,   # sync fal_client API to avoid "Event loop is closed" in gateway
     emoji="🎨",
+    dynamic_schema_overrides=_build_dynamic_image_schema,
 )

@@ -363,22 +363,25 @@ class TestAspectRatioNormalization:
 
 class TestRegistryIntegration:
 
-    def test_schema_exposes_only_prompt_and_aspect_ratio_to_agent(self, image_tool):
-        """The agent-facing schema must stay tight — model selection is a
-        user-level config choice, not an agent-level arg.
-
-        hermes-fork: Venice image generation also accepts ``reference_images``,
-        which is injected only when a reference-capable provider is active. It is
-        the single permitted extra on top of the always-present core args — the
-        schema must never expose anything else to the agent.
-        """
+    def test_schema_exposes_expected_agent_params(self, image_tool):
+        """The agent-facing schema exposes the unified text+image surface:
+        prompt (required), aspect_ratio, the image-to-image inputs
+        (image_url + reference_image_urls), and the hermes-fork
+        reference_images for Venice reference-conditioned generation.
+        Model selection stays a user-level config choice."""
         props = image_tool.IMAGE_GENERATE_SCHEMA["parameters"]["properties"]
         keys = set(props.keys())
-        assert {"prompt", "aspect_ratio"} <= keys <= {
+        # Core args always present
+        assert {"prompt", "aspect_ratio"} <= keys
+        # Schema must not expose anything outside the known set
+        assert keys <= {
             "prompt",
             "aspect_ratio",
+            "image_url",
+            "reference_image_urls",
             "reference_images",
         }
+        assert image_tool.IMAGE_GENERATE_SCHEMA["parameters"]["required"] == ["prompt"]
 
     def test_aspect_ratio_enum_is_three_values(self, image_tool):
         enum = image_tool.IMAGE_GENERATE_SCHEMA["parameters"]["properties"]["aspect_ratio"]["enum"]
