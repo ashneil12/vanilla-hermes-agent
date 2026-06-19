@@ -1595,6 +1595,7 @@ AUTHOR_MAP = {
     "92538686+colinwren-stripe@users.noreply.github.com": "colinwren-stripe",
     "eurekaxun@163.com": "huangxun375-stack",  # PR #37251 / #48894 structured OpenViking sync
     "218421507+Sahil-SS9@users.noreply.github.com": "Sahil-SS9",  # PR #48466/#44919/#44909/#42209 salvage (cron/checkpoint/kanban/skill)
+    "fyzan.shaik@gmail.com": "fyzanshaik",
 }
 
 
