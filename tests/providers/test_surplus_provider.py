@@ -120,7 +120,7 @@ class TestSurplusModelOrdering:
         )
         monkeypatch.setattr(
             "providers.base.ProviderProfile.fetch_models",
-            lambda self, *, api_key=None, timeout=8.0: list(catalog),
+            lambda self, *, api_key=None, base_url=None, timeout=8.0: list(catalog),
         )
 
     def test_live_models_sorted_and_variants_adjacent(self, monkeypatch):
@@ -167,7 +167,7 @@ class TestSurplusModelOrdering:
         )
         monkeypatch.setattr(
             "providers.base.ProviderProfile.fetch_models",
-            lambda self, *, api_key=None, timeout=8.0: None,
+            lambda self, *, api_key=None, base_url=None, timeout=8.0: None,
         )
 
         assert provider_model_ids("surplus") == ["claude-opus-4.6", "llama-3.3-70b"]
