@@ -2284,14 +2284,14 @@ class TestWebServerEndpoints:
         assert out["base_url"] == "http://127.0.0.1:8000/v1"
         assert "context_length" not in out
 
-        # Switching providers (custom → openrouter) → stale base_url cleared.
+        # Switching providers (custom → openrouter) → stale base_url replaced with openrouter profile URL.
         out = _apply_main_model_assignment(
             {"provider": "custom", "base_url": "http://127.0.0.1:8000/v1"},
             "openrouter",
             "anthropic/claude-opus-4.8",
         )
         assert out["provider"] == "openrouter"
-        assert out["base_url"] == ""
+        assert out["base_url"] == "https://openrouter.ai/api/v1"
 
         # Same provider, no new base_url → existing custom endpoint preserved.
         # Regression: picking a different MiMo model under xiaomi must NOT wipe a
@@ -2477,7 +2477,7 @@ class TestWebServerEndpoints:
             json={"scope": "main", "provider": "openrouter", "model": "anthropic/claude-opus-4.8"},
         )
         assert resp.status_code == 200
-        assert resp.json()["base_url"] == ""
+        assert resp.json()["base_url"] == "https://openrouter.ai/api/v1"
 
     def test_set_model_main_same_provider_preserves_base_url(self):
         """Re-picking a model under the SAME provider must NOT wipe a configured
@@ -2561,7 +2561,7 @@ class TestWebServerEndpoints:
 
         model_cfg = load_config().get("model")
         assert model_cfg["provider"] == "openrouter"
-        assert model_cfg.get("base_url", "") == ""
+        assert model_cfg.get("base_url", "") == "https://openrouter.ai/api/v1"
 
     def test_set_model_main_gateway_failure_does_not_block_save(self, monkeypatch):
         """A Portal/gateway hiccup must never prevent saving the model."""
