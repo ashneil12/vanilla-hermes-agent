@@ -45,6 +45,8 @@ ACP_REGISTRY_MANIFEST = REPO_ROOT / "acp_registry" / "agent.json"
 
 # Auto-extracted from noreply emails + manual overrides
 AUTHOR_MAP = {
+    "rratmansky@gmail.com": "rratmansky",
+    "lkz-de@users.noreply.github.com": "lkz-de",
     "charles@salesondemand.io": "salesondemandio",
     "victor@rocketfueldev.com": "victor-kyriazakos",
     "87440198+JoaoMarcos44@users.noreply.github.com": "JoaoMarcos44",
@@ -1619,6 +1621,7 @@ AUTHOR_MAP = {
     "yspdev@gmail.com": "AJ",  # PR #44510 co-author (desktop named-profile boot loop)
     # hermes-fork: 2026-06-20 upstream sync
     "daniel.laforce@argobox.com": "KeyArgo",
+    "5494586+jasnoorgill@users.noreply.github.com": "jasnoorgill",
 }
 
 
