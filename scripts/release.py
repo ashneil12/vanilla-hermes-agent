@@ -1622,6 +1622,7 @@ AUTHOR_MAP = {
     "yspdev@gmail.com": "AJ",  # PR #44510 co-author (desktop named-profile boot loop)
     # hermes-fork: 2026-06-20 upstream sync
     "daniel.laforce@argobox.com": "KeyArgo",
+    "5494586+jasnoorgill@users.noreply.github.com": "jasnoorgill",
 }
 
 
