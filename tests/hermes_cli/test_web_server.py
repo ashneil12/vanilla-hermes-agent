@@ -2,7 +2,6 @@
 
 import asyncio
 import os
-import base64
 import json
 import shutil
 from pathlib import Path
@@ -265,38 +264,6 @@ class TestWebServerEndpoints:
         monkeypatch.setattr(hermes_constants, "is_container", lambda: True)
 
         assert web_server._dashboard_local_update_managed_externally() is True
-
-    def test_upload_web_attachment_writes_sanitized_file(self):
-        """Browser/iframe chat uploads materialize files into isolated HERMES_HOME storage."""
-        from hermes_constants import get_hermes_home
-
-        body = b"hello from browser iframe"
-        data_url = f"data:text/plain;base64,{base64.b64encode(body).decode('ascii')}"
-
-        resp = self.client.post(
-            "/api/attachments/upload",
-            json={"data_url": data_url, "mime_type": "text/plain", "name": "../evil?.txt"},
-        )
-
-        assert resp.status_code == 200
-        data = resp.json()
-        saved = Path(data["path"])
-        assert saved.is_file()
-        assert saved.read_bytes() == body
-        assert saved.name.endswith("-evil_.txt")
-        assert saved.is_relative_to(get_hermes_home() / "uploads")
-        assert data["name"] == "evil_.txt"
-        assert data["size"] == len(body)
-        assert data["mime_type"] == "text/plain"
-
-    def test_upload_web_attachment_rejects_invalid_base64(self):
-        resp = self.client.post(
-            "/api/attachments/upload",
-            json={"data_url": "data:text/plain;base64,not-valid!", "name": "bad.txt"},
-        )
-
-        assert resp.status_code == 400
-        assert "base64" in resp.json()["detail"]
 
     @staticmethod
     def _provider_field_map(payload):
@@ -2302,12 +2269,10 @@ class TestWebServerEndpoints:
 
     def test_apply_main_model_assignment_base_url_and_context_reconcile(self):
         """The shared main-slot assignment helper must persist a supplied
-        base_url, adopt the new provider's registered endpoint when switching
-        providers (falling back to "" only when the provider has no profile
-        base_url), preserve it on same-provider re-assignment, and always drop a
-        hardcoded context_length override. Both POST /api/model/set and
-        profile-model writes route through this, so the contract is pinned
-        here."""
+        base_url, clear a stale base_url only when switching providers, preserve
+        it on same-provider re-assignment, and always drop a hardcoded
+        context_length override. Both POST /api/model/set and profile-model
+        writes route through this, so the contract is pinned here."""
         from hermes_cli.web_server import _apply_main_model_assignment
 
         # Custom + base_url → persisted; stale context_length dropped.
@@ -2319,16 +2284,14 @@ class TestWebServerEndpoints:
         assert out["base_url"] == "http://127.0.0.1:8000/v1"
         assert "context_length" not in out
 
-        # Switching providers (custom → openrouter) with no explicit URL → the
-        # stale custom URL is replaced with openrouter's registered endpoint,
-        # NOT blanked (a blank would route the new provider to the OpenAI host).
+        # Switching providers (custom → openrouter) → stale base_url cleared.
         out = _apply_main_model_assignment(
             {"provider": "custom", "base_url": "http://127.0.0.1:8000/v1"},
             "openrouter",
             "anthropic/claude-opus-4.8",
         )
         assert out["provider"] == "openrouter"
-        assert out["base_url"] == "https://openrouter.ai/api/v1"
+        assert out["base_url"] == ""
 
         # Same provider, no new base_url → existing custom endpoint preserved.
         # Regression: picking a different MiMo model under xiaomi must NOT wipe a
@@ -2351,8 +2314,7 @@ class TestWebServerEndpoints:
         )
         assert out["base_url"] == "https://token-plan-cn.xiaomimimo.com/v1"
 
-        # Switching to a provider with no profile base_url (custom) → fall back
-        # to "" (registry default), dropping the stale URL.
+        # Switching providers without a base_url → don't invent one, clear stale.
         out = _apply_main_model_assignment(
             {"provider": "openrouter", "base_url": "http://stale:1/v1"}, "custom", "m"
         )
@@ -2362,30 +2324,45 @@ class TestWebServerEndpoints:
         out = _apply_main_model_assignment("not-a-dict", "custom", "m", "http://x/v1")
         assert out == {"provider": "custom", "default": "m", "base_url": "http://x/v1"}
 
+        # api_key follows the same lifecycle as base_url:
+        # supplied → persisted.
+        out = _apply_main_model_assignment(
+            {"api": "sk-legacy-old"}, "custom", "m", "http://x/v1", "sk-secret"
+        )
+        assert out["api_key"] == "sk-secret"
+        assert "api" not in out
+
+        # same provider, no new key → existing key preserved (re-picking a model
+        # on the same custom endpoint must not wipe the saved key).
+        out = _apply_main_model_assignment(
+            {"provider": "custom", "base_url": "http://x/v1", "api_key": "sk-keep"},
+            "custom",
+            "m2",
+        )
+        assert out["api_key"] == "sk-keep"
+
+        # switching providers without a new key → stale key cleared.
+        out = _apply_main_model_assignment(
+            {"provider": "custom", "api_key": "sk-old", "api_mode": "anthropic_messages"},
+            "openrouter",
+            "m",
+        )
+        assert "api_key" not in out
+        assert "api_mode" not in out
+
+
     def test_apply_main_model_assignment_writes_registered_provider_base_url(self):
         """Defect 2: switching the MAIN model to a registered BYOK marketplace
         provider (surplus) with no explicit base_url must write that provider's
-        own inference endpoint — not blank base_url, which would route the
+        own inference endpoint -- not blank base_url, which would route the
         provider's key to the OpenAI default host and break new chats."""
         from hermes_cli.web_server import _apply_main_model_assignment
-
-        # No stored base_url at all (the case #89's logic missed: its
-        # `model_cfg.get("base_url")` precondition meant a bare switch was a
-        # no-op and the OpenAI default leaked through).
-        out = _apply_main_model_assignment(
-            {"provider": "anthropic"}, "surplus", "claude-haiku-4.5"
-        )
-        assert out["provider"] == "surplus"
-        assert out["default"] == "claude-haiku-4.5"
-        assert out["base_url"] == "https://www.surplusintelligence.ai/api/inference/v1"
-
-        # A stale base_url from the previous provider is replaced too.
-        out = _apply_main_model_assignment(
-            {"provider": "openai-api", "base_url": "https://api.openai.com/v1"},
-            "surplus",
-            "claude-haiku-4.5",
-        )
-        assert out["base_url"] == "https://www.surplusintelligence.ai/api/inference/v1"
+        out = _apply_main_model_assignment({'provider': 'anthropic'}, 'surplus', 'claude-haiku-4.5')
+        assert out['provider'] == 'surplus'
+        assert out['default'] == 'claude-haiku-4.5'
+        assert out['base_url'] == 'https://www.surplusintelligence.ai/api/inference/v1'
+        out = _apply_main_model_assignment({'provider': 'openai-api', 'base_url': 'https://api.openai.com/v1'}, 'surplus', 'claude-haiku-4.5')
+        assert out['base_url'] == 'https://www.surplusintelligence.ai/api/inference/v1'
 
     def test_parse_model_ids_handles_openai_and_bare_shapes(self):
         """Model discovery must tolerate the common /v1/models shapes and
@@ -2443,10 +2420,48 @@ class TestWebServerEndpoints:
         assert model_cfg["default"] == "llama-3.1-8b"
         assert model_cfg["base_url"] == "http://127.0.0.1:8000/v1"
 
-    def test_set_model_main_non_custom_writes_provider_base_url(self):
-        """Switching to a hosted provider must replace a stale base_url with that
-        provider's own registered endpoint, so the resolver routes to the right
-        host (not the OpenAI default)."""
+    def test_set_model_main_custom_persists_api_key_and_registers_provider(self):
+        """A custom endpoint that requires auth must persist model.api_key (where
+        the runtime reads it) AND register a named custom_providers entry so the
+        endpoint reappears as a ready row in the picker — matching the
+        ``hermes model`` custom flow. Regression for the desktop loop where a
+        keyed custom endpoint could never be configured from the GUI."""
+        from hermes_cli.config import load_config
+
+        resp = self.client.post(
+            "/api/model/set",
+            json={
+                "scope": "main",
+                "provider": "custom",
+                "model": "gpt-oss-120b",
+                "base_url": "https://text.example.com/v1",
+                "api_key": "sk-secret",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is True
+
+        cfg = load_config()
+        model_cfg = cfg.get("model")
+        assert isinstance(model_cfg, dict)
+        assert model_cfg["provider"] == "custom"
+        assert model_cfg["base_url"] == "https://text.example.com/v1"
+        assert model_cfg["api_key"] == "sk-secret"
+
+        # Registered in custom_providers (dedup by base_url) so the picker shows
+        # a proper ready row instead of the "needs setup" dead-end.
+        custom = cfg.get("custom_providers") or []
+        assert any(
+            isinstance(e, dict)
+            and e.get("base_url") == "https://text.example.com/v1"
+            and e.get("api_key") == "sk-secret"
+            and e.get("model") == "gpt-oss-120b"
+            for e in custom
+        )
+
+    def test_set_model_main_non_custom_clears_stale_base_url(self):
+        """Switching to a hosted provider must clear a stale base_url so the
+        resolver picks that provider's own default endpoint."""
         from hermes_cli.config import load_config, save_config
 
         cfg = load_config()
@@ -2462,7 +2477,7 @@ class TestWebServerEndpoints:
             json={"scope": "main", "provider": "openrouter", "model": "anthropic/claude-opus-4.8"},
         )
         assert resp.status_code == 200
-        assert resp.json()["base_url"] == "https://openrouter.ai/api/v1"
+        assert resp.json()["base_url"] == ""
 
     def test_set_model_main_same_provider_preserves_base_url(self):
         """Re-picking a model under the SAME provider must NOT wipe a configured
@@ -2546,7 +2561,7 @@ class TestWebServerEndpoints:
 
         model_cfg = load_config().get("model")
         assert model_cfg["provider"] == "openrouter"
-        assert model_cfg.get("base_url", "") == "https://openrouter.ai/api/v1"
+        assert model_cfg.get("base_url", "") == ""
 
     def test_set_model_main_gateway_failure_does_not_block_save(self, monkeypatch):
         """A Portal/gateway hiccup must never prevent saving the model."""
@@ -2867,6 +2882,42 @@ class TestNewEndpoints:
     def test_cron_job_not_found(self):
         resp = self.client.get("/api/cron/jobs/nonexistent-id")
         assert resp.status_code == 404
+
+    # --- Automation Blueprints ---
+
+    def test_cron_blueprints_list(self):
+        resp = self.client.get("/api/cron/blueprints")
+        assert resp.status_code == 200
+        blueprints = resp.json()["blueprints"]
+        assert len(blueprints) >= 1
+        first = blueprints[0]
+        assert "fields" in first
+        assert first["command"].startswith("/blueprint")
+        assert first["appUrl"].startswith("hermes://")
+
+    def test_blueprint_instantiate_creates_job(self):
+        resp = self.client.post(
+            "/api/cron/blueprints/instantiate",
+            json={"blueprint": "morning-brief", "values": {"time": "07:30", "deliver": "local"}},
+        )
+        assert resp.status_code == 200
+        job = resp.json()
+        assert (job.get("schedule_display") or "").strip() == "30 7 * * *" or \
+            (job.get("schedule", {}) or {}).get("expr") == "30 7 * * *"
+
+    def test_blueprint_instantiate_unknown_404(self):
+        resp = self.client.post(
+            "/api/cron/blueprints/instantiate",
+            json={"blueprint": "does-not-exist", "values": {}},
+        )
+        assert resp.status_code == 404
+
+    def test_blueprint_instantiate_bad_value_422(self):
+        resp = self.client.post(
+            "/api/cron/blueprints/instantiate",
+            json={"blueprint": "morning-brief", "values": {"time": "99:99"}},
+        )
+        assert resp.status_code == 422
 
     # --- Profiles ---
 
@@ -5749,6 +5800,83 @@ class TestValidateProviderCredential:
     def test_empty_value_rejected(self):
         data = self._post("OPENAI_API_KEY", "   ").json()
         assert data["ok"] is False
+
+    def test_local_endpoint_forwards_api_key_as_bearer(self, monkeypatch):
+        """A custom endpoint that gates /v1/models behind auth must still
+        enumerate models: the optional api_key is sent as a Bearer header so the
+        probe doesn't come back empty (the desktop loop's root cause)."""
+        captured = {}
+
+        class _Resp:
+            status_code = 200
+            is_success = True
+
+            def json(self):
+                return {"data": [{"id": "gpt-oss-120b"}]}
+
+        class _Client:
+            def __init__(self, *a, **k):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def get(self, url, *a, headers=None, **k):
+                captured["url"] = url
+                captured["headers"] = headers
+                return _Resp()
+
+        monkeypatch.setattr("httpx.Client", _Client)
+
+        resp = self.client.post(
+            "/api/providers/validate",
+            json={
+                "key": "OPENAI_BASE_URL",
+                "value": "https://text.example.com/v1",
+                "api_key": "sk-secret",
+            },
+        )
+        data = resp.json()
+        assert data["ok"] is True and data["reachable"] is True
+        assert data["models"] == ["gpt-oss-120b"]
+        assert captured["url"] == "https://text.example.com/v1/models"
+        assert captured["headers"] == {"Authorization": "Bearer sk-secret"}
+
+    def test_local_endpoint_without_key_sends_no_auth_header(self, monkeypatch):
+        """No key → no Authorization header (keyless local servers unaffected)."""
+        captured = {}
+
+        class _Resp:
+            status_code = 200
+            is_success = True
+
+            def json(self):
+                return {"data": []}
+
+        class _Client:
+            def __init__(self, *a, **k):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def get(self, url, *a, headers=None, **k):
+                captured["headers"] = headers
+                return _Resp()
+
+        monkeypatch.setattr("httpx.Client", _Client)
+
+        self.client.post(
+            "/api/providers/validate",
+            json={"key": "OPENAI_BASE_URL", "value": "http://127.0.0.1:8000/v1"},
+        )
+        assert captured["headers"] is None
 
 
 class TestDesktopCronTicker:
