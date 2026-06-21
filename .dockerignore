@@ -66,8 +66,16 @@ runtime/
 
 # ---------- Not needed inside the Docker image ----------
 
-# Desktop app source (Tauri/Electron); never installed in the container
+# Desktop app source (Tauri/Electron); never installed in the container.
+# EXCEPTION: the Dockerfile webchat_build stage builds apps/desktop into
+# /webchat_dist, and apps/desktop depends on @hermes/shared (file:../shared),
+# so those two workspaces MUST be in the build context. (apps/bootstrap-installer
+# stays excluded.)
 apps/
+!apps/desktop
+!apps/desktop/**
+!apps/shared
+!apps/shared/**
 
 # Test suite — not shipped in production images
 tests/
