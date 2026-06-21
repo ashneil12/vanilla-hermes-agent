@@ -1036,6 +1036,7 @@ class APIServerAdapter(BasePlatformAdapter):
         tool_start_callback=None,
         tool_complete_callback=None,
         gateway_session_key: Optional[str] = None,
+        toolsets_override: Optional[List[str]] = None,
     ) -> Any:
         """
         Create an AIAgent instance using the gateway's runtime config.
@@ -1068,6 +1069,12 @@ class APIServerAdapter(BasePlatformAdapter):
 
         user_config = _load_gateway_config()
         enabled_toolsets = sorted(_get_platform_tools(user_config, "api_server"))
+
+        # hermes-fork: per-request (per-room) tool-scope override from the
+        # /v1/runs body. When present it REPLACES the config-derived toolsets
+        # for this run only; None keeps the config-driven behavior untouched.
+        if toolsets_override is not None:
+            enabled_toolsets = sorted(set(toolsets_override))
 
         max_iterations = _current_max_iterations()
 
@@ -3854,6 +3861,27 @@ class APIServerAdapter(BasePlatformAdapter):
         instructions = body.get("instructions")
         previous_response_id = body.get("previous_response_id")
 
+        # hermes-fork: optional per-room tool-scope override. A room (persona
+        # lens) may request a narrowed/expanded toolset for this run only.
+        # Validate against the known TOOLSETS keys so a room can't request an
+        # arbitrary/invalid toolset. Absent => config-driven default (today).
+        raw_toolsets = body.get("toolsets")
+        toolsets_override: Optional[List[str]] = None
+        if raw_toolsets is not None:
+            if not isinstance(raw_toolsets, list) or not all(isinstance(t, str) for t in raw_toolsets):
+                return web.json_response(
+                    _openai_error("'toolsets' must be an array of strings"),
+                    status=400,
+                )
+            from toolsets import TOOLSETS
+            unknown = [t for t in raw_toolsets if t not in TOOLSETS]
+            if unknown:
+                return web.json_response(
+                    _openai_error(f"Unknown toolset(s): {unknown}"),
+                    status=400,
+                )
+            toolsets_override = raw_toolsets
+
         # Accept explicit conversation_history from the request body.
         # Precedence: explicit conversation_history > previous_response_id.
         conversation_history: List[Dict[str, str]] = []
@@ -3956,6 +3984,7 @@ class APIServerAdapter(BasePlatformAdapter):
                     stream_delta_callback=_text_cb,
                     tool_progress_callback=event_cb,
                     gateway_session_key=gateway_session_key,
+                    toolsets_override=toolsets_override,
                 )
                 self._active_run_agents[run_id] = agent
                 # hermes-fork: heartbeat from the agent's step callback.
