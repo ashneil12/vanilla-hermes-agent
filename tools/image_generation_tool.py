@@ -1204,7 +1204,9 @@ IMAGE_GENERATE_SCHEMA = {
         "or `reference_images` to generate FROM an existing image "
         "(reference-conditioned generation via Venice edit) — give the prior "
         "image(s) plus a prompt and the original is preserved while your "
-        "changes are applied."
+        "changes are applied. You may also pass `reference_image_urls` for "
+        "additional style/composition references on backends (FAL, OpenAI, "
+        "xAI, etc.) that support them."
     ),
     "parameters": {
         "type": "object",
