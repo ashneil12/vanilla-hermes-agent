@@ -13,6 +13,7 @@ that also has ``uv tool install hermes-agent`` does not get misclassified.
 """
 from __future__ import annotations
 
+import os
 import subprocess
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -30,9 +31,16 @@ import pytest
 # ``shutil.which`` so the existing test setup keeps working without
 # per-test changes.
 @pytest.fixture(autouse=True)
-def _patch_managed_uv(request):
+def _patch_managed_uv(request, tmp_path, monkeypatch):
     """Make managed_uv helpers follow shutil.which mocking in tests."""
     import shutil
+
+    # _cmd_update_pip now calls ensure_uv_cache_env(), which mutates
+    # os.environ['UV_CACHE_DIR']. Isolate HERMES_HOME to a throwaway tmp path and
+    # drop any ambient UV_CACHE_DIR so that pin is deterministic and never touches
+    # the runner's ~/.hermes; monkeypatch restores os.environ after each test.
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.delenv("UV_CACHE_DIR", raising=False)
 
     # resolve_uv delegates to shutil.which("uv") so that test patches
     # on shutil.which flow through naturally.
@@ -340,3 +348,76 @@ class TestCmdUpdatePipInstallLayouts:
         assert "--system" not in cmd
         assert cmd == ["/usr/bin/uv", "pip", "install", "--upgrade", "hermes-agent"]
         assert mock_run.call_args.kwargs["env"]["VIRTUAL_ENV"] == "/home/u/.hermes/hermes-agent/venv"
+
+
+# ---------------------------------------------------------------------------
+# ensure_uv_cache_env — the cache-dir pin that survives a stale/foreign
+# UV_CACHE_DIR (e.g. a /state/.env written before a HERMES_HOME migration moved
+# the home from /home/hermeswebui to /home/hermes). Regression for the support
+# report:
+#   error: Failed to initialize cache at `/home/hermeswebui/.hermes/cache/uv`
+#     Caused by: failed to create directory ...: Permission denied (os error 13)
+# ---------------------------------------------------------------------------
+
+
+class TestEnsureUvCacheEnv:
+    def test_pins_cache_under_hermes_home_when_unset(self, tmp_path, monkeypatch):
+        from hermes_cli import managed_uv
+
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.delenv("UV_CACHE_DIR", raising=False)
+
+        result = managed_uv.ensure_uv_cache_env()
+
+        assert result == str(tmp_path / "cache" / "uv")
+        assert os.environ["UV_CACHE_DIR"] == str(tmp_path / "cache" / "uv")
+        assert (tmp_path / "cache" / "uv").is_dir()
+
+    def test_overrides_unwritable_inherited_cache(self, tmp_path, monkeypatch):
+        """A UV_CACHE_DIR pointing at an uncreatable path (the foreign-home case)
+        is replaced with the managed $HERMES_HOME/cache/uv path."""
+        from hermes_cli import managed_uv
+
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        # A regular file blocks creating a dir beneath it -> NotADirectoryError,
+        # standing in for "owned by another user / Permission denied".
+        blocker = tmp_path / "blocker"
+        blocker.write_text("x")
+        monkeypatch.setenv("UV_CACHE_DIR", str(blocker / "uv"))
+
+        managed_uv.ensure_uv_cache_env()
+
+        assert os.environ["UV_CACHE_DIR"] == str(tmp_path / "cache" / "uv")
+
+    def test_keeps_writable_inherited_cache(self, tmp_path, monkeypatch):
+        """A user-set, writable UV_CACHE_DIR is honored, not clobbered."""
+        from hermes_cli import managed_uv
+
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
+        custom = tmp_path / "custom-cache"
+        monkeypatch.setenv("UV_CACHE_DIR", str(custom))
+
+        result = managed_uv.ensure_uv_cache_env()
+
+        assert result == str(custom)
+        assert os.environ["UV_CACHE_DIR"] == str(custom)
+
+    @patch("subprocess.run")
+    def test_cmd_update_pip_pins_cache_before_upgrade(self, mock_run, tmp_path, monkeypatch):
+        """The PyPI self-upgrade pins UV_CACHE_DIR (the reported brick) regardless
+        of which install layout runs the upgrade."""
+        from hermes_cli.main import _cmd_update_pip
+
+        mock_run.return_value = subprocess.CompletedProcess(["uv"], 0, stdout="", stderr="")
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        # Stand in for the stale/foreign /home/hermeswebui cache with an
+        # uncreatable path (under a regular file) so it's unwritable even as root.
+        blocker = tmp_path / "blocker"
+        blocker.write_text("x")
+        monkeypatch.setenv("UV_CACHE_DIR", str(blocker / "uv"))
+
+        with patch("shutil.which", return_value="/usr/local/bin/uv"), \
+             patch("hermes_cli.config.is_uv_tool_install", return_value=False):
+            _cmd_update_pip(SimpleNamespace())
+
+        assert os.environ["UV_CACHE_DIR"] == str(tmp_path / "cache" / "uv")

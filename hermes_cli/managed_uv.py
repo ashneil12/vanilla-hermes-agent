@@ -51,6 +51,57 @@ def resolve_uv() -> Optional[str]:
     return None
 
 
+def hermes_uv_cache_dir() -> Path:
+    """Return the cache directory Hermes pins its managed uv to.
+
+    Lives under the SAME ``HERMES_HOME`` as the managed uv binary
+    (``$HERMES_HOME/bin/uv``) so the cache can never drift to a foreign home —
+    see :func:`ensure_uv_cache_env` for why that matters.
+    """
+    return get_hermes_home() / "cache" / "uv"
+
+
+def _dir_is_writable(path: Path) -> bool:
+    """Best-effort: create *path* if needed and report whether it is writable."""
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return False
+    return os.access(path, os.W_OK)
+
+
+def ensure_uv_cache_env() -> str:
+    """Pin ``UV_CACHE_DIR`` (in ``os.environ``) to a writable cache directory.
+
+    uv resolves its cache from ``UV_CACHE_DIR`` (falling back to
+    ``$XDG_CACHE_HOME`` / ``~/.cache``). When that value is inherited from a
+    stale environment — e.g. a ``/state/.env`` written before a HERMES_HOME
+    migration moved the home from ``/home/hermeswebui`` to ``/home/hermes`` —
+    it can point at a directory owned by a *different* user. uv then aborts
+    every command before doing any work::
+
+        error: Failed to initialize cache at `/home/hermeswebui/.hermes/cache/uv`
+          Caused by: failed to create directory ...: Permission denied (os error 13)
+
+    which bricks ``hermes update`` and any other managed-uv call. Call this right
+    before invoking the managed uv: when the configured ``UV_CACHE_DIR`` is
+    missing or unwritable we point it at ``$HERMES_HOME/cache/uv`` (where the
+    managed uv binary already lives), so every uv spawned afterwards inherits a
+    usable cache. A caller-set, writable ``UV_CACHE_DIR`` is left untouched.
+
+    Mutates ``os.environ`` deliberately — that's how the fix reaches subprocesses
+    without each call site threading an ``env`` dict (and ``hermes update`` is a
+    one-shot command). Returns the resolved cache dir. Idempotent.
+    """
+    configured = (os.environ.get("UV_CACHE_DIR") or "").strip()
+    if configured and _dir_is_writable(Path(configured)):
+        return configured
+    cache_dir = hermes_uv_cache_dir()
+    _dir_is_writable(cache_dir)  # best-effort pre-create; uv also creates it
+    os.environ["UV_CACHE_DIR"] = str(cache_dir)
+    return str(cache_dir)
+
+
 class _UvResult(str):
     """``ensure_uv()`` return value that survives an update boundary.
 
@@ -167,6 +218,9 @@ def update_managed_uv() -> Optional[str]:
         # Not installed yet — ensure_uv() will handle that elsewhere.
         return None
 
+    # A stale/foreign UV_CACHE_DIR would make `uv self update` fail to init its
+    # cache before it even downloads — pin it to a writable dir first.
+    ensure_uv_cache_env()
     result = subprocess.run(
         [existing, "self", "update"],
         capture_output=True,

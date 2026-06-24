@@ -8500,12 +8500,19 @@ def _cmd_update_pip(args):
     print(f"→ Current version: {__version__}")
     print("→ Checking PyPI for updates...")
 
-    from hermes_cli.managed_uv import ensure_uv, update_managed_uv
+    from hermes_cli.managed_uv import ensure_uv, ensure_uv_cache_env, update_managed_uv
 
     # Keep managed uv current before using it.
     update_managed_uv()
 
     uv = ensure_uv()
+    if uv:
+        # A stale/foreign UV_CACHE_DIR (e.g. from a /state/.env written before a
+        # HERMES_HOME migration moved the home from /home/hermeswebui to
+        # /home/hermes) makes uv abort with "Failed to initialize cache ...
+        # Permission denied" before the upgrade runs. Pin it to a writable
+        # $HERMES_HOME/cache/uv. See managed_uv.ensure_uv_cache_env.
+        ensure_uv_cache_env()
     in_venv = sys.prefix != sys.base_prefix
     # pipx-managed installs live under .../pipx/venvs/<name>/...
     pipx_managed = "pipx" in sys.prefix.split(os.sep)
