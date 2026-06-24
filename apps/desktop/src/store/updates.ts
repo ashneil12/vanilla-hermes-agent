@@ -67,23 +67,10 @@ export const resetUpdateApplyState = () => {
   $backendUpdateApply.set(IDLE)
 }
 
+// Still referenced by the apply flows to clear any lingering toast (e.g. the
+// backend-out-of-date warning, or the post-apply "all set" toast) when an
+// update starts.
 const UPDATE_TOAST_ID = 'desktop-update-available'
-// Time-based snooze instead of per-sha dismissal: this repo lands ~100 commits
-// a day, so a "don't show this exact sha again" guard re-popped the toast on
-// every new commit. We instead suppress the toast for a cooldown window that
-// (re)starts whenever the user closes it.
-const UPDATE_TOAST_SNOOZE_KEY = 'hermes:update-toast-snooze-until'
-const UPDATE_TOAST_COOLDOWN_MS = 24 * 60 * 60 * 1000
-
-function snoozeUpdateToast(): void {
-  persistString(UPDATE_TOAST_SNOOZE_KEY, String(Date.now() + UPDATE_TOAST_COOLDOWN_MS))
-}
-
-function isUpdateToastSnoozed(): boolean {
-  const until = Number(storedString(UPDATE_TOAST_SNOOZE_KEY) || 0)
-
-  return Number.isFinite(until) && Date.now() < until
-}
 
 // Must match tui_gateway's DESKTOP_BACKEND_CONTRACT that this build was written
 // against. The backend reports its own value in session runtime info; a lower
@@ -132,14 +119,10 @@ export function reportBackendContract(contract: number | undefined): void {
     return
   }
 
+  // Managed fleet: no in-app self-update button. This stays a passive heads-up
+  // (the backend is updated centrally); the message tells the user it resolves
+  // automatically / to contact support. See the "Update ready" removal note below.
   notify({
-    action: {
-      label: translateNow('notifications.updateHermes'),
-      onClick: () => {
-        snoozeSkewToast()
-        void applyBackendUpdate()
-      }
-    },
     durationMs: 0,
     id: SKEW_TOAST_ID,
     kind: 'warning',
@@ -149,47 +132,15 @@ export function reportBackendContract(contract: number | undefined): void {
   })
 }
 
-/**
- * Fire a toast when an update is available, at most once per cooldown window.
- * Closing the toast — dismissing it or opening the updates window from it —
- * (re)starts the cooldown, so a busy upstream branch doesn't re-spam the user
- * on every new commit. The snooze is persisted, so it survives relaunches too.
- */
-export function maybeNotifyUpdateAvailable(status: DesktopUpdateStatus | null) {
-  if (!status || status.supported === false || status.error || !status.targetSha) {
-    return
-  }
-
-  if ((status.behind ?? 0) <= 0) {
-    return
-  }
-
-  if (isUpdateToastSnoozed()) {
-    return
-  }
-
-  if ($updateApply.get().applying) {
-    return
-  }
-
-  const behind = status.behind ?? 0
-
-  notify({
-    action: {
-      label: translateNow('notifications.seeWhatsNew'),
-      onClick: () => {
-        snoozeUpdateToast()
-        openUpdatesWindow()
-      }
-    },
-    durationMs: 0,
-    id: UPDATE_TOAST_ID,
-    kind: 'info',
-    message: translateNow('notifications.updateReadyMessage', behind),
-    onDismiss: () => snoozeUpdateToast(),
-    title: translateNow('notifications.updateReadyTitle')
-  })
-}
+// NOTE: the proactive "Update ready" toast (maybeNotifyUpdateAvailable) and the
+// About-panel "Update now" trigger (startActiveUpdate) were removed. HermesOS
+// instances are managed — the agent/backend is updated centrally via image
+// rebuild + redeploy, not by users self-updating from inside the app. The pop-up
+// confused users and funnelled them into the in-app `hermes update` path (which
+// could also brick on a stale uv cache). Update status is still tracked on
+// $updateStatus / $backendUpdateStatus; openUpdatesWindow() is kept for the
+// native menu's deliberate "Check for updates" action. We just no longer
+// interrupt with an unsolicited toast or surface in-app apply buttons.
 
 export function openUpdatesWindow(): void {
   openUpdateOverlayFor(isRemoteMode() ? 'backend' : 'client')
@@ -250,7 +201,6 @@ export async function checkBackendUpdates(): Promise<DesktopUpdateStatus | null>
   try {
     const status = mapBackendCheck(await checkHermesUpdate(true))
     $backendUpdateStatus.set(status)
-    maybeNotifyUpdateAvailable(status)
 
     return status
   } catch (error) {
@@ -281,7 +231,6 @@ export async function checkUpdates(): Promise<DesktopUpdateStatus | null> {
   try {
     const status = await bridge.check()
     $updateStatus.set(status)
-    maybeNotifyUpdateAvailable(status)
     void refreshDesktopVersion()
 
     return status
