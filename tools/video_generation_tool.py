@@ -462,6 +462,9 @@ _GENERIC_DESCRIPTION = (
     # hermes-fork: MEDIA: render-prefix steering (load-bearing — makes
     # generated video render inline in chat) + image->video auto-pairing.
     "Generate a video from a text prompt (text-to-video) or animate a "
+    # Kept over upstream's reworded description (case D): upstream only
+    # rephrased the file-delivery sentence; ours carries the load-bearing
+    # MEDIA: prefix steering for inline video playback + auto-pair docs.
     "still image (image-to-video). ALWAYS USE THIS TOOL for any video "
     "generation request. Do NOT use shell, curl, bash, fetch, or any "
     "terminal-side approach to hit video APIs directly — that bypasses "

@@ -35,11 +35,12 @@ export function AboutSettings() {
       <div className="mx-auto mt-4 w-full max-w-2xl">
         <SectionHeading icon={RefreshCw} title={a.updates} />
 
-        {/* HermesOS is managed — the agent/backend is updated centrally (image
-            rebuild + redeploy). The in-app self-update controls (check / "see
-            what's new" / "update now") were removed so users aren't funnelled
-            into the `hermes update` path; this stays as a passive, non-actionable
-            note. */}
+        {/* hermes-fork (case D — kept over upstream's 06-24/25 self-update
+            overlay re-add): HermesOS is managed — the agent/backend is updated
+            centrally (image rebuild + redeploy). The in-app self-update controls
+            (check / "see what's new" / "update now") were removed so users aren't
+            funnelled into the `hermes update` path; this stays as a passive,
+            non-actionable note. */}
         <ListRow description={a.automaticUpdatesDesc} title={a.automaticUpdates} />
 
         <UninstallSection />
