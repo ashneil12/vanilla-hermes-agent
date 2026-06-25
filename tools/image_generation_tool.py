@@ -1180,6 +1180,9 @@ IMAGE_GENERATE_SCHEMA = {
     "description": (
         # hermes-fork: MEDIA: render-prefix steering (load-bearing — makes
         # generated images render inline in chat) + reference-image support.
+        # Kept over upstream's reworded description (case D): upstream only
+        # rephrased the file-delivery sentence; ours carries the load-bearing
+        # MEDIA: prefix steering + reference_images docs.
         "Generate images from text prompts. ALWAYS USE THIS TOOL for any "
         "image generation request. Do NOT use shell, curl, bash, fetch, "
         "or any terminal-side approach to hit image APIs directly — that "
