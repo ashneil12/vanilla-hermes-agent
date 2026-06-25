@@ -45,6 +45,9 @@ ACP_REGISTRY_MANIFEST = REPO_ROOT / "acp_registry" / "agent.json"
 
 # Auto-extracted from noreply emails + manual overrides
 AUTHOR_MAP = {
+    "285906080+AIalliAI@users.noreply.github.com": "AIalliAI",  # PR salvage (announce gateway drain waits on desktop update; fixes #44515)
+    "SJWATTS89@OUTLOOK.COM": "lEWFkRAD",  # PR #45610 salvage (harden Windows gateway scheduled task; #45599)
+    "poli.koltsova@gmail.com": "wnuuee1",  # PR salvage (desktop styled Tip tooltips replacing native title)
     "dana@added-value.co.il": "Danamove",  # PR #46726 salvage (kill venv-resident pythonw gateway before recreating venv on Windows; #47036/#47557/#47910)
     "145739220+wgu9@users.noreply.github.com": "wgu9",  # PR #51468 salvage (WSL/no-systemd orphan gateway tracking, #51325)
     "165020384+uperLu@users.noreply.github.com": "uperLu",  # PR #50958 salvage (rename plugins/cron → plugins/cron_providers; #50872)
