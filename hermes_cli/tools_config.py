@@ -70,6 +70,8 @@ CONFIGURABLE_TOOLSETS = [
     ("video_gen",       "🎬 Video Generation",          "video_generate (text-to-video + image-to-video)"),
     ("crypto",          "⛓️  On-Chain (read-only)",     "crypto_rpc — read EVM/other chains via Venice RPC (balances, blocks, eth_call)"),
     ("x_search",        "🐦 X (Twitter) Search",        "x_search (requires xAI OAuth or XAI_API_KEY)"),
+    # hermes-fork: keep moa in the tools checklist (upstream merge dropped it 2026-06-27)
+    ("moa",             "🧠 Mixture of Agents",         "mixture_of_agents"),
     ("tts",             "🔊 Text-to-Speech",            "text_to_speech"),
     ("skills",          "📚 Skills",                    "list, view, manage"),
     ("todo",            "📋 Task Planning",             "todo"),
@@ -583,6 +585,8 @@ TOOL_CATEGORIES = {
 # Simple env-var requirements for toolsets NOT in TOOL_CATEGORIES.
 # Used as a fallback for toolsets like vision that just need an API key.
 TOOLSET_ENV_REQUIREMENTS = {
+    # hermes-fork: keep moa's credential prompt (upstream merge dropped it 2026-06-27)
+    "moa":        [("OPENROUTER_API_KEY",   "https://openrouter.ai/keys")],
     "vision":     [("OPENROUTER_API_KEY",   "https://openrouter.ai/keys")],
 }
 
