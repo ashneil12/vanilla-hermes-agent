@@ -2,6 +2,10 @@ import { useStore } from '@nanostores/react'
 import { useEffect } from 'react'
 
 import { BrandMark } from '@/components/brand-mark'
+// hermes-fork: HermesOS is centrally managed (image rebuild + redeploy), so the
+// in-app self-update controls are intentionally absent. We keep ONLY the imports
+// the passive "automatic updates" note needs — do NOT re-take upstream's
+// self-update UI imports (Button/Codicon/checkUpdates/startActiveUpdate/etc.).
 import { useI18n } from '@/i18n'
 import { RefreshCw } from '@/lib/icons'
 import { $desktopVersion, refreshDesktopVersion } from '@/store/updates'
@@ -35,11 +39,12 @@ export function AboutSettings() {
       <div className="mx-auto mt-4 w-full max-w-2xl">
         <SectionHeading icon={RefreshCw} title={a.updates} />
 
-        {/* HermesOS is managed — the agent/backend is updated centrally (image
-            rebuild + redeploy). The in-app self-update controls (check / "see
-            what's new" / "update now") were removed so users aren't funnelled
-            into the `hermes update` path; this stays as a passive, non-actionable
-            note. */}
+        {/* hermes-fork: HermesOS is managed — the agent/backend is updated
+            centrally (image rebuild + redeploy). The in-app self-update controls
+            (check / "see what's new" / "update now") that upstream ships here are
+            intentionally removed so users aren't funnelled into the
+            `hermes update` path; this stays as a passive, non-actionable note.
+            Do NOT re-take upstream's self-update <div> on the next sync. */}
         <ListRow description={a.automaticUpdatesDesc} title={a.automaticUpdates} />
 
         <UninstallSection />
