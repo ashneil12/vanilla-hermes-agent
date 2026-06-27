@@ -1718,6 +1718,8 @@ AUTHOR_MAP = {
     # hermes-fork: 2026-06-20 upstream sync
     "daniel.laforce@argobox.com": "KeyArgo",
     "5494586+jasnoorgill@users.noreply.github.com": "jasnoorgill",
+    # hermes-fork: 2026-06-27 upstream sync
+    "DavidMetcalfe@users.noreply.github.com": "DavidMetcalfe",
 }
 
 
