@@ -76,12 +76,18 @@ _HERMES_CORE_TOOLS = [
     # Text-to-speech
     "text_to_speech",
     # Planning & memory + embeddings
-    # text_embed registers under ``toolset="memory"`` (see tools/embed_tool.py);
-    # same subset-check reasoning as the image_gen tools above — without
-    # listing it here the ``memory`` toolset disappears from the LLM's tool
-    # list at runtime once embed_tool is imported.
+    # hermes-fork: text_embed registers under ``toolset="memory"`` (see
+    # tools/embed_tool.py); same subset-check reasoning as the image_gen tools
+    # above — without listing it here the ``memory`` toolset disappears from the
+    # LLM's tool list at runtime once embed_tool is imported.
     "todo", "memory", "text_embed",
+    # hermes-fork: Venice character roster tool (subset of platform composite)
     "venice_characters",
+    # NOTE: the desktop Project tools (project_list/create/switch) are
+    # deliberately NOT here. They only make sense where a GUI can follow the
+    # move, so they live in the `project` toolset and are enabled solely by the
+    # GUI gateway (tui_gateway/server.py::_load_enabled_toolsets) — keeping them
+    # off every CLI/messaging/cron schema (narrow waist).
     # Session history search
     "session_search",
     # Clarifying questions
@@ -209,12 +215,6 @@ TOOLSETS = {
         "includes": []
     },
     
-    "moa": {
-        "description": "Advanced reasoning and problem-solving tools",
-        "tools": ["mixture_of_agents"],
-        "includes": []
-    },
-    
     "skills": {
         "description": "Access, create, edit, and manage skill documents with specialized instructions and knowledge",
         "tools": ["skills_list", "skill_view", "skill_manage"],
@@ -297,6 +297,12 @@ TOOLSETS = {
     "session_search": {
         "description": "Search and recall past conversations with summarization",
         "tools": ["session_search"],
+        "includes": []
+    },
+
+    "project": {
+        "description": "Desktop Projects — create/switch named workspaces (GUI sessions only)",
+        "tools": ["project_list", "project_create", "project_switch"],
         "includes": []
     },
     
