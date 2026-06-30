@@ -1754,6 +1754,9 @@ AUTHOR_MAP = {
     "DavidMetcalfe@users.noreply.github.com": "DavidMetcalfe",
     "afnlegion01@gmail.com": "Afnath-max",  # PR #49129 salvage (opencode-zen catalog refresh + uncapped/live-first picker)
     "sharma.priyanshu96@gmail.com": "ipriyaaanshu",  # PR #51488 salvage (clear stale base_url on gateway model switches; #25107)
+    # hermes-fork: 2026-06-30 upstream sync
+    "christianpersico98@gmail.com": "chrispersico",  # docs: fix incorrect web search instructions
+    "joeykerp@gmail.com": "spjoes",  # PR #55099 (allow any http:// host in self-hosted OIDC redirect_uri)
 }
 
 
