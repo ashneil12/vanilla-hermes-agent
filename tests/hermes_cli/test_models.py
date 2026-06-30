@@ -1000,8 +1000,6 @@ class TestNormalizeModelForProviderVenice:
         from hermes_cli.models import VENICE_MODEL_ALIASES, normalize_venice_model_id
         for target in set(VENICE_MODEL_ALIASES.values()):
             assert normalize_venice_model_id("venice", target) == (target, None)
-
-
 class TestCodexSoftAcceptPlausibilityGate:
     """#45006 kernel (b): the openai-codex / xai-oauth hidden-model soft-accept
     (#16172 / #19729) must only accept slugs that plausibly belong to that

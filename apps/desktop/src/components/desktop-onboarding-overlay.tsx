@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input'
 import { Loader } from '@/components/ui/loader'
 import { getGlobalModelOptions, getStatus } from '@/hermes'
 import { useI18n } from '@/i18n'
+// hermes-fork: openExternalLink + Sparkles power the managed-Venice enable CTA
 import { openExternalLink } from '@/lib/external-link'
 import {
   Check,
