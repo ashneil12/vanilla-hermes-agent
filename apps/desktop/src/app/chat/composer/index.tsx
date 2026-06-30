@@ -2049,6 +2049,13 @@ export function ChatBar({
       onPickFiles={onPickFiles}
       onPickFolders={onPickFolders}
       onPickImages={onPickImages}
+      onWebAttachFiles={
+        onAttachDroppedItems
+          ? // path: '' = the browser-drop shape (no local fs path) → attachDroppedItems
+            // resolves it via the web uploadFile bridge, same as drag-drop.
+            files => void onAttachDroppedItems(files.map(file => ({ file, path: '' })))
+          : undefined
+      }
       state={state}
     />
   )
