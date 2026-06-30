@@ -70,6 +70,8 @@ AUTHOR_MAP = {
     "rebel@rebels-Mac-Studio-2.local": "rebel0789",  # PR #47308 salvage (redact browser_type typed text across display surfaces; #47197)
     "267614622+agt-user@users.noreply.github.com": "agt-user",  # PR #48496 salvage (telegram CLOSE-WAIT polling heartbeat, #48495)
     "80915+DavidMetcalfe@users.noreply.github.com": "DavidMetcalfe",  # PR #52272 salvage (route reasoning-model thinking-timeouts to timeout not context_overflow + reasoning-specific guidance; #52271)
+    # hermes-fork: 2026-06-27 upstream sync — David's bare-email commit variant
+    "DavidMetcalfe@users.noreply.github.com": "DavidMetcalfe",
     "66773372+Tranquil-Flow@users.noreply.github.com": "Tranquil-Flow",  # PR #52623 salvage (auxiliary Anthropic base_url host validation; #52608)
     "65363919+coygeek@users.noreply.github.com": "coygeek",  # PR #37735 salvage (redact provider error text at api-server HTTP boundary; #37733)
     "moonsong@nousresearch.local": "Tranquil-Flow",  # PR #52623 salvage (auxiliary Anthropic base_url host validation; #52608)
@@ -1727,7 +1729,6 @@ AUTHOR_MAP = {
     "mango001@126.com": "max-chen",  # PR #51194 salvage (single-pass list_profiles alias map + skill-count cache; #54751)
     # v0.17.0 additions
     "2081789787@qq.com": "pengyuyanITYU",  # PR #43618 (harden local file tree paths)
-    "adalsteinni@gmail.com": "AIalliAI",  # PR #44159 (desktop hover-reveal inset)
     "ameobius@local.host": "ameobius",  # PR #44383 co-author (discord gateway task recovery)
     "andyfieb@gmail.com": "mollusk",  # PR #44493 (desktop assistant-ui recovery)
     "drmani215@gmail.com": "bionicbutterfly13",  # direct email match
