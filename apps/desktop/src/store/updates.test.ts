@@ -39,6 +39,11 @@ vi.mock('@/hermes', () => ({
   getActionStatus: (...args: unknown[]) => getActionStatusSpy(...args)
 }))
 
+// hermes-fork (case B/D): combine the fork's backend-update imports with
+// upstream's new applyUpdates-flow imports. maybeNotifyUpdateAvailable is
+// DROPPED — the fork removed the proactive "Update ready" toast (managed-only;
+// see the NOTE in updates.ts), so the store no longer exports it and upstream's
+// test never calls it (import-only).
 const {
   checkBackendUpdates,
   $backendUpdateStatus,
