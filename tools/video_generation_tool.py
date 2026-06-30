@@ -18,13 +18,11 @@ Generation.
 
 Unified surface
 ---------------
-One tool covers the common cases — text-to-video, image-to-video, video
-edit, video extend — with a compact schema:
+One tool covers the common cases - text-to-video, image-to-video, and
+reference-to-video - with a compact schema:
 
-    prompt                   text instruction (required for generate/edit)
-    operation                "generate" | "edit" | "extend"
-    image_url                drives image-to-video when operation=generate
-    video_url                source video for edit/extend
+    prompt                   text instruction (required)
+    image_url                drives image-to-video
     reference_image_urls     list, up to provider-declared cap
     duration                 seconds (provider clamps)
     aspect_ratio             "16:9" | "9:16" | "1:1" | ...
@@ -38,6 +36,9 @@ Providers ignore parameters they do not support. The tool layer does
 **lightweight** validation (type/required-prompt) and lets each provider
 do its own clamping inside :meth:`VideoGenProvider.generate` — that keeps
 the tool surface stable as new providers ship with different capabilities.
+
+Video edit and video extend are intentionally not exposed here; providers with
+those workflows should expose separate tools.
 """
 
 from __future__ import annotations
@@ -95,10 +96,9 @@ VIDEO_GENERATE_SCHEMA: Dict[str, Any] = {
                 "type": "array",
                 "items": {"type": "string"},
                 "description": (
-                    "Optional list of reference image URLs (style or "
-                    "character refs). Only supported by some backends; "
-                    "the active backend's description below indicates whether "
-                    "this is honored and what the max is."
+                    "Optional list of public HTTPS reference image URLs "
+                    "(style or character refs). For xAI chaining, use "
+                    "`image` or `public_url` from prior Imagine results."
                 ),
             },
             "duration": {
@@ -344,7 +344,11 @@ def _coerce_image_to_data_url(ref: str, *, budget: int = 3_000_000) -> str:
         elif data[:4] == b"RIFF" and data[8:12] == b"WEBP":
             mime = "image/webp"
         else:
-            mime = "image/png"
+            # Not a recognised image — e.g. a bare provider file-id that happens
+            # to be valid base64. Don't fabricate a data: URL (that would smuggle
+            # garbage past the provider's image validation, e.g. xAI's bare
+            # file-id rejection). Return unchanged so the provider validates it.
+            return ref
         return f"data:{mime};base64," + _b64.b64encode(data).decode("ascii")
     except Exception:
         return ref
@@ -371,6 +375,11 @@ def _handle_video_generate(args: Dict[str, Any], **_kw: Any) -> str:
     # endpoint but our surface always needs a prompt.
     if not prompt:
         return tool_error("prompt is required for video generation")
+    if "operation" in args or "video_url" in args:
+        return tool_error(
+            "video_generate only supports text-to-video, image-to-video, and "
+            "reference-to-video; use a provider-specific tool for video edit/extend"
+        )
 
     # Resolve the active provider.
     configured = _read_configured_video_provider()
@@ -445,13 +454,13 @@ def _handle_video_generate(args: Dict[str, Any], **_kw: Any) -> str:
 # Dynamic schema — reflect the active backend's actual capabilities
 # ---------------------------------------------------------------------------
 #
-# Why dynamic: the user's configured backend determines which operations
-# (generate/edit/extend), modalities (text / image / refs), aspect ratios,
-# resolutions, durations, and audio/negative-prompt flags are real. A model
-# that calls video_generate without knowing the active backend wastes a
-# turn on something like "fal-ai/veo3.1/image-to-video requires image_url".
-# Surfacing the per-model surface in the description means the model
-# usually gets the call right on the first try.
+# Why dynamic: the user's configured backend determines which modalities
+# (text / image / refs), aspect ratios, resolutions, durations, and
+# audio/negative-prompt flags are real. A model that calls video_generate
+# without knowing the active backend wastes a turn on something like
+# "fal-ai/veo3.1/image-to-video requires image_url". Surfacing the per-model
+# surface in the description means the model usually gets the call right on
+# the first try.
 #
 # Memoization: model_tools.get_tool_definitions() keys its cache on
 # config.yaml mtime, so when the user changes provider/model via
@@ -467,8 +476,11 @@ _GENERIC_DESCRIPTION = (
     "terminal-side approach to hit video APIs directly — that bypasses "
     "the user's configured provider (Venice / FAL / xAI), bypasses "
     "billing/credentials, and produces output the chat UI cannot "
-    "auto-render. Pass `image_url` to animate that image; omit it to "
-    "generate from text alone. The backend auto-routes to the right "
+    "auto-render. Pass `image_url` to animate that image, "
+    "`reference_image_urls` to guide generation with reference images, or "
+    "omit both to generate from text alone. Video edit/extend workflows are not "
+    "part of this unified surface; use a dedicated provider-specific tool when "
+    "one is available. The backend auto-routes to the right "
     "endpoint and auto-pairs to whichever provider has a key — you do "
     "not need to pick. Long-running generations take 30 seconds to "
     "several minutes; the call blocks until the video is ready. Returns "
@@ -620,6 +632,21 @@ def _build_dynamic_video_schema() -> Dict[str, Any]:
     max_refs = caps.get("max_reference_images") or 0
     if max_refs:
         parts.append(f"- reference_image_urls: up to {max_refs} images")
+    if configured == "xai":
+        parts.append(
+            "- chaining: for edit/extend pass the public HTTPS MP4 in `video` "
+            "or `public_url` from the prior Imagine result (files-cdn). For "
+            "image-to-video / reference-to-video pass public image URLs the "
+            "same way"
+        )
+        try:
+            from tools.xai_http import xai_storage_notice_text
+
+            notice = xai_storage_notice_text("video_gen")
+        except Exception:
+            notice = ""
+        if notice:
+            parts.append(f"- storage: {notice}")
 
     return {"description": "\n".join(parts)}
 

@@ -33,9 +33,10 @@ _HERMES_CORE_TOOLS = [
     "web_search", "web_extract",
     # Terminal + process management
     "terminal", "process",
-    # Read the desktop GUI's embedded terminal pane (gated on HERMES_DESKTOP
-    # via check_fn in tools/read_terminal_tool.py — hidden outside the GUI).
-    "read_terminal",
+    # Read the desktop GUI's embedded terminal pane, and close an agent's
+    # read-only terminal tab (both gated on HERMES_DESKTOP via check_fn —
+    # hidden outside the GUI).
+    "read_terminal", "close_terminal",
     # File manipulation
     "read_file", "write_file", "patch", "search_files",
     # Vision + image generation + multimodal editing
@@ -181,11 +182,13 @@ TOOLSETS = {
     "video_gen": {
         "description": (
             "Video + audio generation. ``video_generate`` covers text-to-video "
-            "(prompt only) and image-to-video (prompt + image_url); "
-            "``audio_generate`` generates music and sound effects (Venice). The "
-            "active backend auto-routes. Configure via ``hermes tools`` → Video Generation."
+            "(prompt only), image-to-video (prompt + image_url), and "
+            "reference-to-video (reference_image_urls); ``audio_generate`` "
+            "generates music and sound effects (Venice). Provider-specific "
+            "edit/extend workflows appear as separate tools. The active backend "
+            "auto-routes. Configure via ``hermes tools`` → Video Generation."
         ),
-        "tools": ["video_generate", "audio_generate", "audio_quote", "video_quote"],
+        "tools": ["video_generate", "audio_generate", "audio_quote", "video_quote", "xai_video_edit", "xai_video_extend"],
         "includes": []
     },
 
@@ -423,7 +426,7 @@ TOOLSETS = {
         "description": "Coding-focused toolset: files, terminal, search, web docs, skills, todo, delegate, vision, browser",
         "tools": [
             "web_search", "web_extract",
-            "terminal", "process", "read_terminal",
+            "terminal", "process", "read_terminal", "close_terminal",
             "read_file", "write_file", "patch", "search_files",
             "vision_analyze",
             "skills_list", "skill_view", "skill_manage",
