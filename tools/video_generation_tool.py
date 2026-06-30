@@ -344,7 +344,11 @@ def _coerce_image_to_data_url(ref: str, *, budget: int = 3_000_000) -> str:
         elif data[:4] == b"RIFF" and data[8:12] == b"WEBP":
             mime = "image/webp"
         else:
-            mime = "image/png"
+            # Not a recognised image — e.g. a bare provider file-id that happens
+            # to be valid base64. Don't fabricate a data: URL (that would smuggle
+            # garbage past the provider's image validation, e.g. xAI's bare
+            # file-id rejection). Return unchanged so the provider validates it.
+            return ref
         return f"data:{mime};base64," + _b64.b64encode(data).decode("ascii")
     except Exception:
         return ref
@@ -474,7 +478,9 @@ _GENERIC_DESCRIPTION = (
     "billing/credentials, and produces output the chat UI cannot "
     "auto-render. Pass `image_url` to animate that image, "
     "`reference_image_urls` to guide generation with reference images, or "
-    "omit both to generate from text alone. The backend auto-routes to the right "
+    "omit both to generate from text alone. Video edit/extend workflows are not "
+    "part of this unified surface; use a dedicated provider-specific tool when "
+    "one is available. The backend auto-routes to the right "
     "endpoint and auto-pairs to whichever provider has a key — you do "
     "not need to pick. Long-running generations take 30 seconds to "
     "several minutes; the call blocks until the video is ready. Returns "

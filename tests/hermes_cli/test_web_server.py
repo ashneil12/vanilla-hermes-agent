@@ -4323,8 +4323,12 @@ class TestDenormalizeProviderSwitch:
         model = result["model"]
         assert model["provider"] == "openrouter"
         assert model["default"] == "google/gemini-2.5-flash"
-        # The old ollama-local endpoint must not carry over to openrouter.
-        assert not model.get("base_url")
+        # The old ollama-local endpoint must not carry over. hermes-fork: a
+        # provider switch adopts the NEW provider's canonical profile base_url
+        # (so BYOK marketplace providers like Surplus route to their own host —
+        # see _provider_profile_base_url + _apply_main_model_assignment); for
+        # openrouter that's its aggregator endpoint, not the stale local one.
+        assert model.get("base_url") == "https://openrouter.ai/api/v1"
 
     def test_unchanged_model_preserves_provider_and_base_url(self):
         """Saving with the model unchanged must never re-detect/overwrite the
