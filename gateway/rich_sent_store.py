@@ -25,12 +25,11 @@ _MAX_TEXT_CHARS = 2000
 
 
 def _store_path() -> str:
-    # Route through the guarded resolver (stdlib-only leaf module, no import
-    # cycle) so an env-stripped child (HERMES_HOME unset, HOME=/opt/hermes) is
-    # redirected off the read-only install tree instead of silently failing to
-    # write under /opt/hermes/.hermes and losing this telemetry.
+    # Resolve via get_hermes_home() so the active profile override is honored.
     from hermes_constants import get_hermes_home
-    return os.path.join(str(get_hermes_home()), "state", "rich_sent_index.json")
+
+    home = get_hermes_home()
+    return os.path.join(str(home), "state", "rich_sent_index.json")
 
 
 def _key(chat_id, message_id) -> str:
