@@ -24,9 +24,11 @@ export const sortProviders = (providers: OAuthProvider[]) =>
   [...providers].sort((a, b) => orderOf(a) - orderOf(b) || a.name.localeCompare(b.name))
 
 export function FeaturedProviderRow({
+  hideRecommendedBadge,
   onSelect,
   provider
 }: {
+  hideRecommendedBadge?: boolean
   onSelect: (provider: OAuthProvider) => void
   provider: OAuthProvider
 }) {
@@ -48,12 +50,12 @@ export function FeaturedProviderRow({
           </span>
           {loggedIn ? (
             <ConnectedTag />
-          ) : (
+          ) : !hideRecommendedBadge ? (
             <span className="inline-flex items-center gap-1.5 bg-primary px-2 py-0.5 text-[0.64rem] font-semibold uppercase tracking-[0.16em] text-primary-foreground">
               <span aria-hidden="true" className="dither inline-block size-2 shrink-0" />
               {t.onboarding.recommended}
             </span>
-          )}
+          ) : null}
         </div>
         <p className="mt-1 text-xs leading-5 text-muted-foreground">{t.onboarding.featuredPitch}</p>
       </div>
