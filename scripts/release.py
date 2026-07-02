@@ -1843,6 +1843,8 @@ AUTHOR_MAP = {
     # hermes-fork: 2026-07-01 upstream sync
     "290881485+mrparker0980@users.noreply.github.com": "mrparker0980",  # @file context-ref expansion anchored to canonical read deny-list
     "3483421977@qq.com": "xy200303",  # upstream contributor
+    # hermes-fork: 2026-07-02 promote — new contributor
+    "carlitosdiazplaza@gmail.com": "talmax1124",
 }
 
 
