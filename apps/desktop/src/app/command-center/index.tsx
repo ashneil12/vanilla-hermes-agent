@@ -293,7 +293,7 @@ export function CommandCenterView({ initialSection, onClose, onDeleteSession, on
             <div className="flex shrink-0 items-center gap-2">
               {section === 'sessions' && (
                 <SearchField
-                  containerClassName="max-w-[40vw]"
+                  containerClassName="max-w-[70vw] sm:max-w-[40vw]"
                   onChange={next => setQuery(next)}
                   placeholder={cc.searchPlaceholder}
                   value={query}
@@ -333,7 +333,7 @@ export function CommandCenterView({ initialSection, onClose, onDeleteSession, on
                             {formatTimestamp(session.last_active || session.started_at)}
                           </div>
                         </button>
-                        <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                        <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 touch:opacity-100">
                           <RowIconButton
                             onClick={() => (pinned ? unpinSession(pinId) : pinSession(pinId))}
                             title={pinned ? cc.unpinSession : cc.pinSession}
