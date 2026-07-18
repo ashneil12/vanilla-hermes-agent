@@ -2,6 +2,7 @@ import { atom } from 'nanostores'
 
 import type { DesktopBootProgress } from '@/global'
 import { translateNow } from '@/i18n'
+import { signalEmbedReady } from '@/lib/embed-ready-signal'
 
 export interface DesktopBootState extends DesktopBootProgress {
   visible: boolean
@@ -74,6 +75,10 @@ export function completeDesktopBoot(message = translateNow('boot.ready')) {
     timestamp: Date.now(),
     visible: false
   })
+  // Boot is genuinely complete here (gateway connected, config + sessions
+  // loaded), which is the only honest moment to tell an embedding dashboard
+  // the chat is alive. No-op outside an iframe.
+  signalEmbedReady()
 }
 
 export function failDesktopBoot(message: string) {
