@@ -15,6 +15,23 @@ vi.mock('@/lib/storage', () => ({
       storage.set(key, value)
     }
   },
+  // store/session persists its exact owner hints through the JSON helpers.
+  readJson: (key: string) => {
+    const value = storage.get(key)
+
+    try {
+      return value === undefined ? null : JSON.parse(value)
+    } catch {
+      return null
+    }
+  },
+  writeJson: (key: string, value: unknown) => {
+    if (value === null) {
+      storage.delete(key)
+    } else {
+      storage.set(key, JSON.stringify(value))
+    }
+  },
   storedBoolean: (key: string, fallback: boolean) => {
     const value = storage.get(key)
 
@@ -57,6 +74,15 @@ vi.mock('@/hermes', () => ({
 // DROPPED — the fork removed the proactive "Update ready" toast (managed-only;
 // see the NOTE in updates.ts), so the store no longer exports it and upstream's
 // test never calls it (import-only).
+// A successful backend apply must nudge the gateway reconnect handler — the
+// update restarted the gateway process, and over tunnels the old socket dies
+// without a close event (users force-quit to recover). Mock the tiny registry
+// module so the assertion is direct.
+const reconnectGatewaySpy = vi.fn().mockResolvedValue(undefined)
+
+vi.mock('@/store/gateway-reconnect', () => ({
+  reconnectGateway: (...args: unknown[]) => reconnectGatewaySpy(...args)
+}))
 const {
   checkBackendUpdates,
   $backendUpdateStatus,
@@ -569,6 +595,24 @@ describe('client nudge after a backend update', () => {
     await new Promise(resolve => setTimeout(resolve, 50))
     const ids = notifySpy.mock.calls.map(call => (call[0] as { id?: string }).id)
     expect(ids).not.toContain('client-update-after-backend')
+  })
+
+  it('nudges a gateway reconnect after the backend caught up (tunnel socket may be dead)', async () => {
+    checkClientMock.mockResolvedValue(status({ behind: 0, updateAvailable: false }))
+    reconnectGatewaySpy.mockClear()
+
+    await applyBackendUpdate()
+
+    expect(reconnectGatewaySpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not nudge a reconnect when the backend apply failed', async () => {
+    reconnectGatewaySpy.mockClear()
+    getActionStatusSpy.mockReset().mockResolvedValue({ lines: [], running: false, exit_code: 1 })
+
+    await applyBackendUpdate()
+
+    expect(reconnectGatewaySpy).not.toHaveBeenCalled()
   })
 })
 
