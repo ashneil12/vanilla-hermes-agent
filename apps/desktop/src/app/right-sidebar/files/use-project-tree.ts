@@ -2,8 +2,8 @@ import { useStore } from '@nanostores/react'
 import { atom } from 'nanostores'
 import { useCallback, useEffect, useMemo } from 'react'
 
-import { desktopFsCacheKey } from '@/lib/desktop-fs'
-import { $connection } from '@/store/session'
+import { desktopDefaultCwd, desktopFsCacheKey } from '@/lib/desktop-fs'
+import { $connection, setCurrentCwd } from '@/store/session'
 import { $workspaceChangeTick, consumeWorkspaceChange } from '@/store/workspace-events'
 
 import { clearProjectDirCache, type ProjectTreeEntry, readProjectDir } from './ipc'
@@ -158,11 +158,18 @@ function clearProjectTree() {
 /** Sessions record their launch cwd; deleted worktrees and remote-backend
  *  paths arrive here as directories that don't exist on this machine. Rather
  *  than bricking the tree, display the sanitized workspace fallback (main
- *  prefers the configured default project dir). Local connections only —
- *  remote trees are read through the remote bridge. */
+ *  prefers the configured default project dir). Remote connections ask that
+ *  same backend for its default cwd; this prevents a local Windows path saved
+ *  while controlling Linux from pinning the remote file tree to ENOENT. */
 async function fallbackRootFor(cwd: string, sourceIsRemote: boolean): Promise<string | null> {
   if (sourceIsRemote) {
-    return null
+    try {
+      const fallback = (await desktopDefaultCwd())?.cwd?.trim() || ''
+
+      return fallback && fallback !== cwd ? fallback : null
+    } catch {
+      return null
+    }
   }
 
   const sanitize = window.hermesDesktop?.sanitizeWorkspaceCwd
@@ -248,6 +255,12 @@ async function loadRoot(
           resolvedCwd = fallback
           entries = retry.entries
           error = undefined
+          if (sourceIsRemote && desktopFsCacheKey() === connectionKey) {
+            // Replace the invalid remembered remote path too, otherwise the
+            // next render/reload immediately asks Linux for the Windows path
+            // again and the statusbar continues advertising the broken root.
+            setCurrentCwd(fallback)
+          }
         }
       }
     }
