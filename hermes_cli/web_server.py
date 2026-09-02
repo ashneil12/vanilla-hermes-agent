@@ -2593,6 +2593,10 @@ _FS_MIME_TYPES = {
     ".webp": "image/webp",
 }
 
+# Hosted Hermes instances mount their persistent project volume here. Local
+# desktop installs normally have no /workspace, so this remains a no-op there.
+_FS_HOSTED_WORKSPACE_ROOT = Path("/workspace")
+
 
 def _fs_path(raw_path: str) -> Path:
     raw = str(raw_path or "").strip()
@@ -2675,6 +2679,23 @@ def _fs_default_cwd() -> str:
                 return str(candidate)
         except (OSError, RuntimeError):
             pass
+    # A hosted dashboard runs from the immutable image checkout at
+    # /opt/hermes. Falling back to Path.cwd() after a stale desktop path (for
+    # example C:/Users/...) therefore gives the file tree a real but read-only
+    # directory. Prefer the purpose-built persistent workspace volume, then
+    # the legacy Hermes-home workspace, whenever either is writable.
+    from hermes_constants import get_default_hermes_root
+
+    for candidate in (
+        _FS_HOSTED_WORKSPACE_ROOT,
+        get_default_hermes_root() / "workspace",
+    ):
+        try:
+            resolved = candidate.expanduser().resolve(strict=False)
+            if resolved.is_dir() and os.access(resolved, os.W_OK):
+                return str(resolved)
+        except (OSError, RuntimeError):
+            continue
     return str(Path.cwd())
 
 
