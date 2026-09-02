@@ -1045,7 +1045,7 @@ describe('usePromptActions /btw', () => {
   it('shows usage when no question is typed', async () => {
     const seeds: Record<string, unknown>[] = []
 
-    const requestGateway = vi.fn(async () => ({} as never))
+    const requestGateway = vi.fn(async () => ({}) as never)
 
     let handle: HarnessHandle | null = null
     await actRender(
@@ -5395,8 +5395,10 @@ describe('uploadComposerAttachment remote read failures', () => {
       })
 
       const calls: { method: string; params?: Record<string, unknown> }[] = []
+
       const requestGateway = vi.fn(async (method: string, params?: Record<string, unknown>) => {
         calls.push({ method, params })
+
         if (method === 'file.attach') {
           return {
             attached: true,
@@ -5404,6 +5406,7 @@ describe('uploadComposerAttachment remote read failures', () => {
             uploaded: true
           } as never
         }
+
         return {} as never
       })
 

@@ -255,6 +255,7 @@ async function loadRoot(
           resolvedCwd = fallback
           entries = retry.entries
           error = undefined
+
           if (sourceIsRemote && desktopFsCacheKey() === connectionKey) {
             // Replace the invalid remembered remote path too, otherwise the
             // next render/reload immediately asks Linux for the Windows path

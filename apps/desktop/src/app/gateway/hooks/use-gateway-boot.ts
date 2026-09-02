@@ -1,4 +1,9 @@
-import { GatewayTransportError, isGatewayReauthRequired, JsonRpcGatewayError, resolveGatewayWsUrl } from '@hermes/shared'
+import {
+  GatewayTransportError,
+  isGatewayReauthRequired,
+  JsonRpcGatewayError,
+  resolveGatewayWsUrl
+} from '@hermes/shared'
 import { useEffect, useRef } from 'react'
 
 import { shouldApplyPostBootProgressError } from '@/components/boot-failure-reauth'
