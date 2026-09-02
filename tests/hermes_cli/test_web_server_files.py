@@ -168,9 +168,11 @@ def test_backup_download_authenticates_via_query_token(
     ).status_code == 401
 
 
-def test_backup_listing_uses_process_home_not_profile_scope(
+def test_backup_listing_uses_default_root_not_profile_scope(
     forced_files_client, monkeypatch, tmp_path
 ):
+    import hermes_constants
+
     client, _root = forced_files_client
     process_home = tmp_path / "process-home"
     backup_dir = process_home / "backups"
@@ -178,9 +180,7 @@ def test_backup_listing_uses_process_home_not_profile_scope(
     archive = backup_dir / "hermes-backup-process.zip"
     archive.write_bytes(b"process-backup")
 
-    monkeypatch.setattr(
-        web_server, "get_process_hermes_home", lambda: process_home
-    )
+    monkeypatch.setattr(hermes_constants, "get_default_hermes_root", lambda: process_home)
     monkeypatch.setattr(
         web_server,
         "get_hermes_home",
