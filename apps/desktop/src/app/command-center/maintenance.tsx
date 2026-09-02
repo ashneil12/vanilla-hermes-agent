@@ -11,7 +11,6 @@ import {
   getBackups,
   getCuratorStatus,
   getMemoryStatus,
-  openBackupDownload,
   type MemoryStatusResponse,
   openBackupDownload,
   resetMemory,
