@@ -14707,7 +14707,13 @@ async def run_security_audit():
 
 
 def _dashboard_backup_dir() -> Path:
-    return get_hermes_home() / "backups"
+    # Backups created from the dashboard Maintenance surface belong to the
+    # installation-wide state volume, not whichever named profile happens to
+    # be active in this server task.  The dashboard CLI can keep a profile
+    # HERMES_HOME override in its inherited ContextVar; using get_hermes_home()
+    # there makes an existing root backup disappear from the listing even
+    # though it is mounted and readable.
+    return get_process_hermes_home() / "backups"
 
 
 def _new_dashboard_backup_path() -> Path:

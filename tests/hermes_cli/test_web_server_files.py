@@ -168,6 +168,33 @@ def test_backup_download_authenticates_via_query_token(
     ).status_code == 401
 
 
+def test_backup_listing_uses_process_home_not_profile_scope(
+    forced_files_client, monkeypatch, tmp_path
+):
+    client, _root = forced_files_client
+    process_home = tmp_path / "process-home"
+    backup_dir = process_home / "backups"
+    backup_dir.mkdir(parents=True)
+    archive = backup_dir / "hermes-backup-process.zip"
+    archive.write_bytes(b"process-backup")
+
+    monkeypatch.setattr(
+        web_server, "get_process_hermes_home", lambda: process_home
+    )
+    monkeypatch.setattr(
+        web_server,
+        "get_hermes_home",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("profile-scoped home must not select dashboard backups")
+        ),
+    )
+
+    listed = client.get("/api/ops/backups")
+
+    assert listed.status_code == 200
+    assert listed.json()["backups"][0]["archive"] == str(archive)
+
+
 def test_stream_requires_header_auth_and_supports_ranges(forced_files_client):
     client, root = forced_files_client
     file_path = _seed_file(client, root, name="out/demo.mp4")
