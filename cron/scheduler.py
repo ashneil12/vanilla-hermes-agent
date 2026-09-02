@@ -6931,23 +6931,6 @@ def run_job(
                     "Job '%s': runtime governor lease close failed: %s",
                     job_id, _runtime_close_err.__class__.__name__,
                 )
-        # Restore TERMINAL_CWD to whatever it was before this job ran.  We
-        # only ever mutate it when the job has a workdir AND actually held
-        # the write lock — a fail-closed timeout raised before the env-set,
-        # so restoring there would replay a pre-wait snapshot over the
-        # ACTIVE holder's live override.
-        if _job_workdir and _cwd_lock_acquired:
-            if _prior_terminal_cwd == "_UNSET_":
-                os.environ.pop("TERMINAL_CWD", None)
-            else:
-                os.environ["TERMINAL_CWD"] = _prior_terminal_cwd
-        # Release the cwd lock now that the env is restored, so a waiting
-        # workdir job (or queued reader) can proceed without seeing the override.
-        if _cwd_lock_acquired:
-            if _holds_cwd_write:
-                _terminal_cwd_lock.release_write()
-            else:
-                _terminal_cwd_lock.release_read()
         _clear_tool_session_cwd(_cron_task_id)
         # Clean up ContextVar session/delivery state for this job.
         # clear_session_vars also clears _SESSION_CWD internally, so no
