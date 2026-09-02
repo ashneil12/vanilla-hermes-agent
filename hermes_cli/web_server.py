@@ -722,7 +722,10 @@ def _has_valid_session_token(request: Request) -> bool:
 # Routes that may also authenticate via a ``?token=`` query param, for download
 # links opened by the OS shell or a new browser tab where the session header
 # can't be set. Kept narrow — same query-token tradeoff as the /api/pty WS.
-_QUERY_TOKEN_API_PATHS: frozenset[str] = frozenset({"/api/files/download"})
+_QUERY_TOKEN_API_PATHS: frozenset[str] = frozenset({
+    "/api/files/download",
+    "/api/ops/backup/download",
+})
 
 
 def _has_valid_query_token(request: Request, path: str) -> bool:
@@ -14710,6 +14713,35 @@ def _dashboard_backup_dir() -> Path:
 def _new_dashboard_backup_path() -> Path:
     stamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
     return _dashboard_backup_dir() / f"hermes-backup-{stamp}-{secrets.token_hex(4)}.zip"
+
+
+@app.get("/api/ops/backups")
+async def list_dashboard_backups():
+    backup_dir = _dashboard_backup_dir()
+    try:
+        candidates = sorted(
+            (path for path in backup_dir.glob("hermes-backup-*.zip") if path.is_file()),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )[:20]
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Could not list backups: {exc}")
+
+    backups = []
+    for path in candidates:
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        backups.append(
+            {
+                "archive": str(path),
+                "name": path.name,
+                "size": stat.st_size,
+                "modified_at": stat.st_mtime,
+            }
+        )
+    return {"backups": backups}
 
 
 @app.post("/api/ops/backup")
