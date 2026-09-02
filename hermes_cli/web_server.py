@@ -14713,7 +14713,13 @@ def _dashboard_backup_dir() -> Path:
     # HERMES_HOME override in its inherited ContextVar; using get_hermes_home()
     # there makes an existing root backup disappear from the listing even
     # though it is mounted and readable.
-    return get_process_hermes_home() / "backups"
+    # The dashboard CLI may also update process HERMES_HOME to the active
+    # profile after launch, so get_process_hermes_home() is not a stable root
+    # in this path.  The canonical resolver folds <root>/profiles/<name> back
+    # to <root> in both desktop and hosted layouts.
+    from hermes_constants import get_default_hermes_root
+
+    return get_default_hermes_root() / "backups"
 
 
 def _new_dashboard_backup_path() -> Path:
