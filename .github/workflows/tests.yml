@@ -21,7 +21,10 @@ jobs:
     # Use the standard GitHub-hosted label so this required check can run for
     # repositories without a separately provisioned larger-runner entitlement.
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The full suite previously relied on a 96-core larger runner. Allow the
+    # always-available standard runner enough wall time to finish the same
+    # unsliced coverage rather than cancelling a healthy run at 30 minutes.
+    timeout-minutes: 60
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
