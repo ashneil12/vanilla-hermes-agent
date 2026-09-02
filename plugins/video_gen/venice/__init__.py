@@ -391,6 +391,7 @@ class VeniceVideoGenProvider(VideoGenProvider):
             "min_duration": MIN_DURATION_SECONDS,
             "supports_audio": True,
             "supports_negative_prompt": True,
+            "supports_seed": True,
             "max_reference_images": MAX_REFERENCE_IMAGES,
         }
 
