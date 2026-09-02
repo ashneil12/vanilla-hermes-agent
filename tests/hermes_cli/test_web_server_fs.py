@@ -99,6 +99,8 @@ def test_fs_default_cwd_recovers_stale_desktop_path_to_hosted_workspace(
     image_checkout = tmp_path / "image-checkout"
     image_checkout.mkdir()
 
+    # Mirrors hosted WebUI: the persisted desktop cwd is invalid on Linux,
+    # while the dashboard process itself starts in the read-only image tree.
     monkeypatch.setattr(web_server, "_FS_HOSTED_WORKSPACE_ROOT", hosted_workspace)
     monkeypatch.setattr(
         web_server,
