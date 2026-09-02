@@ -100,6 +100,33 @@ def test_progress_output_tolerates_legacy_stdout_encoding(tmp_path: Path) -> Non
     assert "1 tests passed" in proc.stdout
 
 
+def test_slice_is_not_inherited_by_pytest_subprocess(tmp_path: Path) -> None:
+    """The parent slice selector must not alter nested runner probes."""
+    repo_root = Path(__file__).resolve().parent.parent
+    runner = repo_root / "scripts" / "run_tests_parallel.py"
+    probe = tmp_path / "test_slice_env_probe.py"
+    probe.write_text(
+        "import os\n\ndef test_slice_is_parent_only():\n"
+        "    assert 'HERMES_TEST_SLICE' not in os.environ\n",
+        encoding="utf-8",
+    )
+
+    env = os.environ.copy()
+    env["HERMES_TEST_SLICE"] = "1/2"
+    proc = subprocess.run(
+        [sys.executable, str(runner), "--files", str(probe), "-j", "1"],
+        cwd=repo_root,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout
+    assert "1 tests passed" in proc.stdout
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only probe")
 @pytest.mark.live_system_guard_bypass
 def test_grandchild_leak_is_killed_by_runner(tmp_path: Path) -> None:

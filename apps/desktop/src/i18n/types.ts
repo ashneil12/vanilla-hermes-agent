@@ -1399,6 +1399,9 @@ export interface Translations {
       securityAuditDesc: string
       backup: string
       backupDesc: string
+      backupReady: string
+      downloadBackup: string
+      backupDownloadFailed: string
       debugShare: string
       debugShareDesc: string
       debugShareRunning: string
